@@ -1,0 +1,16 @@
+[package]
+name = "agentkitforge-app"
+version = "0.1.0"
+description = "AgentKitForge desktop application"
+authors = ["AgentKitForge"]
+edition = "2021"
+
+[lib]
+name = "agentkitforge_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
