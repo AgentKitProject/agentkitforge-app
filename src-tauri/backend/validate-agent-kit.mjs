@@ -1,0 +1,27 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [, , rootPath, profile] = process.argv;
+
+if (!rootPath || !profile) {
+  console.error("Usage: node validate-agent-kit.mjs <rootPath> <profile>");
+  process.exit(2);
+}
+
+try {
+  const core = await loadCore();
+  const report = await core.validateAgentKit(rootPath, profile);
+  process.stdout.write(JSON.stringify(report));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+async function loadCore() {
+  if (process.env.AGENTKITFORGE_CORE_PATH) {
+    const entry = path.join(process.env.AGENTKITFORGE_CORE_PATH, "dist", "index.js");
+    return import(pathToFileURL(entry).href);
+  }
+
+  return import("agentkitforge-core");
+}

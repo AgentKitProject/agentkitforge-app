@@ -29,6 +29,13 @@ button {
   cursor: pointer;
 }
 
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
@@ -235,6 +242,10 @@ select:focus {
   background: #235ed2;
 }
 
+.primary-button:disabled:hover {
+  background: #2f6fed;
+}
+
 .secondary-button {
   color: #203049;
   background: #ffffff;
@@ -303,6 +314,147 @@ select:focus {
 
 .results-panel p {
   margin-top: 14px;
+}
+
+.path-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+}
+
+.icon-button {
+  display: inline-grid;
+  min-height: 42px;
+  place-items: center;
+  color: #203049;
+  background: #ffffff;
+  border: 1px solid #ccd3dd;
+  border-radius: 8px;
+}
+
+.icon-button:hover {
+  background: #f2f5f8;
+}
+
+.state-copy {
+  margin-top: 14px;
+}
+
+.error-state {
+  margin-top: 14px;
+  padding: 12px 14px;
+  color: #8a1f22;
+  background: #fff1f1;
+  border: 1px solid #f2c7c8;
+  border-radius: 8px;
+  line-height: 1.45;
+}
+
+.validation-report {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid;
+}
+
+.status-banner.valid {
+  color: #12523a;
+  background: #edf8f2;
+  border-color: #b9e5cd;
+}
+
+.status-banner.invalid {
+  color: #7a2323;
+  background: #fff1f1;
+  border-color: #f2c7c8;
+}
+
+.status-banner span {
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.report-meta {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.report-meta div {
+  display: grid;
+  gap: 4px;
+}
+
+.report-meta dt,
+.issue-code,
+.issue-path {
+  color: #6a7280;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.report-meta dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #253047;
+}
+
+.issue-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.issue-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: #253047;
+  font-size: 0.95rem;
+  text-transform: capitalize;
+}
+
+.issue-group h3 span {
+  display: inline-grid;
+  min-width: 24px;
+  min-height: 24px;
+  place-items: center;
+  color: #4b5563;
+  background: #eef1f5;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.issue-group ul {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.issue-group li {
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
+.issue-group p {
+  margin: 4px 0;
+}
+
+.issue-path {
+  overflow-wrap: anywhere;
 }
 
 .input-with-icon {

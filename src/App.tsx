@@ -11,15 +11,32 @@ import {
   Sparkles,
   Wrench,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useMemo, useState } from "react";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
+type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
+type ValidationIssueSeverity = "error" | "warning";
 
 type AppState = {
   currentKitPath: string;
   defaultOutputFolder: string;
   openAiApiKey: string;
-  preferredValidationProfile: string;
+  preferredValidationProfile: ValidationProfile;
+};
+
+type ValidationIssue = {
+  severity: ValidationIssueSeverity;
+  code: string;
+  message: string;
+  path?: string;
+};
+
+type ValidationReport = {
+  valid: boolean;
+  profile: ValidationProfile;
+  rootPath: string;
+  issues: ValidationIssue[];
 };
 
 type NavItem = {
@@ -28,7 +45,7 @@ type NavItem = {
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
 };
 
-const validationProfiles = ["standard", "strict", "publish-ready"];
+const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "trusted", "verified"];
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -44,7 +61,7 @@ export function App() {
     currentKitPath: "",
     defaultOutputFolder: "",
     openAiApiKey: "",
-    preferredValidationProfile: "standard",
+    preferredValidationProfile: "local-valid",
   });
 
   const activeTitle = useMemo(
@@ -176,25 +193,84 @@ function ValidateScreen({
   onProfileChange,
 }: {
   currentKitPath: string;
-  profile: string;
+  profile: ValidationProfile;
   onKitPathChange: (value: string) => void;
-  onProfileChange: (value: string) => void;
+  onProfileChange: (value: ValidationProfile) => void;
 }) {
+  const [report, setReport] = useState<ValidationReport | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [isValidating, setIsValidating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function selectFolder() {
+    setIsSelecting(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        onKitPathChange(selectedPath);
+        setReport(null);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelecting(false);
+    }
+  }
+
+  async function validateKit() {
+    setIsValidating(true);
+    setError(null);
+    setReport(null);
+
+    try {
+      const validationReport = await invoke<ValidationReport>("validate_agent_kit", {
+        rootPath: currentKitPath,
+        profile,
+      });
+      setReport(validationReport);
+      onKitPathChange(validationReport.rootPath);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsValidating(false);
+    }
+  }
+
   return (
     <div className="form-layout">
       <div className="form-panel">
         <label htmlFor="validate-kit-folder">Select kit folder</label>
-        <input
-          id="validate-kit-folder"
-          onChange={(event) => onKitPathChange(event.target.value)}
-          placeholder="C:\\kits\\agent-kit"
-          value={currentKitPath}
-        />
+        <div className="path-picker">
+          <input
+            id="validate-kit-folder"
+            onChange={(event) => {
+              onKitPathChange(event.target.value);
+              setReport(null);
+            }}
+            placeholder="C:\\kits\\agent-kit"
+            value={currentKitPath}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelecting || isValidating}
+            onClick={selectFolder}
+            title="Select folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
 
         <label htmlFor="validation-profile">Validation profile</label>
         <select
           id="validation-profile"
-          onChange={(event) => onProfileChange(event.target.value)}
+          disabled={isValidating}
+          onChange={(event) => {
+            onProfileChange(event.target.value as ValidationProfile);
+            setReport(null);
+          }}
           value={profile}
         >
           {validationProfiles.map((validationProfile) => (
@@ -204,15 +280,20 @@ function ValidateScreen({
           ))}
         </select>
 
-        <button className="primary-button" type="button">
+        <button
+          className="primary-button"
+          disabled={isValidating || currentKitPath.trim() === ""}
+          onClick={validateKit}
+          type="button"
+        >
           <CheckCircle2 size={18} />
-          Validate
+          {isValidating ? "Validating" : "Validate"}
         </button>
       </div>
 
       <div className="results-panel">
         <div className="panel-label">Results</div>
-        <p>Validation output will appear here after agentkitforge-core commands are connected.</p>
+        <ValidationResults error={error} isLoading={isValidating} report={report} />
       </div>
     </div>
   );
@@ -279,7 +360,9 @@ function SettingsScreen({
       <label htmlFor="preferred-validation-profile">Preferred validation profile</label>
       <select
         id="preferred-validation-profile"
-        onChange={(event) => onUpdate("preferredValidationProfile", event.target.value)}
+        onChange={(event) =>
+          onUpdate("preferredValidationProfile", event.target.value as ValidationProfile)
+        }
         value={appState.preferredValidationProfile}
       >
         {validationProfiles.map((validationProfile) => (
@@ -290,6 +373,112 @@ function SettingsScreen({
       </select>
     </div>
   );
+}
+
+function ValidationResults({
+  error,
+  isLoading,
+  report,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  report: ValidationReport | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Running validation with agentkitforge-core...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!report) {
+    return <p className="state-copy">Select a kit folder and run validation to see results.</p>;
+  }
+
+  const issuesBySeverity = groupIssuesBySeverity(report.issues);
+
+  return (
+    <div className="validation-report">
+      <div className={`status-banner ${report.valid ? "valid" : "invalid"}`}>
+        <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+        <span>{report.issues.length} issue{report.issues.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Profile</dt>
+          <dd>{report.profile}</dd>
+        </div>
+        <div>
+          <dt>Root path</dt>
+          <dd>{report.rootPath}</dd>
+        </div>
+      </dl>
+
+      {report.issues.length === 0 ? (
+        <p className="state-copy">No validation issues found.</p>
+      ) : (
+        <div className="issue-groups">
+          {(["error", "warning"] as ValidationIssueSeverity[]).map((severity) => (
+            <IssueGroup issues={issuesBySeverity[severity]} key={severity} severity={severity} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IssueGroup({
+  issues,
+  severity,
+}: {
+  issues: ValidationIssue[];
+  severity: ValidationIssueSeverity;
+}) {
+  if (issues.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="issue-group">
+      <h3>
+        {severity}
+        <span>{issues.length}</span>
+      </h3>
+      <ul>
+        {issues.map((issue, index) => (
+          <li key={`${issue.code}-${issue.path ?? "root"}-${index}`}>
+            <div className="issue-code">{issue.code}</div>
+            <p>{issue.message}</p>
+            {issue.path && <div className="issue-path">{issue.path}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function groupIssuesBySeverity(issues: ValidationIssue[]) {
+  return issues.reduce<Record<ValidationIssueSeverity, ValidationIssue[]>>(
+    (grouped, issue) => {
+      grouped[issue.severity].push(issue);
+      return grouped;
+    },
+    { error: [], warning: [] },
+  );
+}
+
+function errorToMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return typeof error === "string" ? error : "Unexpected validation error.";
 }
 
 function PlaceholderCard({
