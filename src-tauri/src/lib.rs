@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs,
-    time::{SystemTime, UNIX_EPOCH},
+    fs::{self, File},
+    io,
     path::{Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, Runtime};
+use zip::ZipArchive;
 
 mod openai_runtime;
 mod settings;
@@ -143,6 +145,24 @@ struct MyKitsLibrary {
     kits: Vec<MyKitEntry>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportAgentKitPackageInput {
+    package_path: String,
+    destination_root_folder: String,
+    force: bool,
+    validation_profile: Option<ValidationProfile>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportAgentKitPackageResult {
+    extracted_path: String,
+    validation_report: ValidationReport,
+    metadata: MyKitEntry,
+    files: Vec<String>,
+}
+
 struct KitMetadata {
     id: String,
     name: String,
@@ -260,6 +280,16 @@ fn select_json_output_path() -> Result<Option<String>, String> {
         .add_filter("JSON", &["json"])
         .set_file_name("agent-kit-draft.json")
         .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_agent_kit_package_file() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Select Agent Kit Package")
+        .add_filter("Agent Kit Package", &["zip"])
+        .pick_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
 }
@@ -708,6 +738,39 @@ fn validate_library_kit<R: Runtime>(
 }
 
 #[tauri::command]
+fn import_agent_kit_package<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ImportAgentKitPackageInput,
+) -> Result<ImportAgentKitPackageResult, String> {
+    let package_path = canonicalize_agent_kit_package(&input.package_path)?;
+    let destination_root = canonicalize_directory(&input.destination_root_folder)?;
+    let validation_profile = input
+        .validation_profile
+        .unwrap_or(ValidationProfile::LocalValid);
+    let target_folder_name = package_stem(&package_path)?;
+    let extraction_folder = unique_or_forced_extraction_folder(
+        &destination_root,
+        &target_folder_name,
+        input.force,
+    )?;
+
+    let files = extract_agent_kit_zip(&package_path, &destination_root, &extraction_folder)?;
+    let report = validate_agent_kit(
+        app,
+        extraction_folder.to_string_lossy().into_owned(),
+        validation_profile,
+    )?;
+    let metadata = metadata_entry_from_path(&extraction_folder, KitLibrarySource::Imported)?;
+
+    Ok(ImportAgentKitPackageResult {
+        extracted_path: extraction_folder.to_string_lossy().into_owned(),
+        validation_report: report,
+        metadata,
+        files,
+    })
+}
+
+#[tauri::command]
 fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
@@ -1090,6 +1153,261 @@ fn read_kit_metadata(root_path: &Path) -> Result<KitMetadata, String> {
     })
 }
 
+fn metadata_entry_from_path(root_path: &Path, source: KitLibrarySource) -> Result<MyKitEntry, String> {
+    let metadata = read_kit_metadata(root_path)?;
+    let now = now_timestamp();
+    Ok(MyKitEntry {
+        id: metadata.id,
+        name: metadata.name,
+        version: metadata.version,
+        description: metadata.description,
+        path: root_path.to_string_lossy().into_owned(),
+        source: source.as_str().to_string(),
+        last_validated_at: None,
+        last_validated_profile: None,
+        last_validation_valid: None,
+        last_used_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+        path_exists: root_path.is_dir(),
+    })
+}
+
+fn canonicalize_agent_kit_package(package_path: &str) -> Result<PathBuf, String> {
+    let trimmed = package_path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a .agentkit.zip package before importing.".to_string());
+    }
+
+    let resolved = Path::new(trimmed)
+        .canonicalize()
+        .map_err(|error| format!("Unable to access selected package: {error}"))?;
+
+    if !resolved.is_file() {
+        return Err("Selected package path is not a file.".to_string());
+    }
+
+    let file_name = resolved
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if !file_name.ends_with(".agentkit.zip") {
+        return Err("Selected package must end with .agentkit.zip.".to_string());
+    }
+
+    Ok(resolved)
+}
+
+fn package_stem(package_path: &Path) -> Result<String, String> {
+    let file_name = package_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Package file name is invalid.".to_string())?;
+    let stem = file_name
+        .strip_suffix(".agentkit.zip")
+        .or_else(|| file_name.strip_suffix(".zip"))
+        .unwrap_or(file_name);
+    Ok(sanitize_folder_name(stem))
+}
+
+fn sanitize_folder_name(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+
+    if sanitized.is_empty() {
+        "imported-agent-kit".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn unique_or_forced_extraction_folder(
+    destination_root: &Path,
+    folder_name: &str,
+    force: bool,
+) -> Result<PathBuf, String> {
+    let base = destination_root.join(folder_name);
+    ensure_child_path(destination_root, &base)?;
+
+    if force {
+        if base.exists() {
+            ensure_child_path(destination_root, &base)?;
+            fs::remove_dir_all(&base)
+                .map_err(|error| format!("Unable to clean existing import folder: {error}"))?;
+        }
+        fs::create_dir_all(&base)
+            .map_err(|error| format!("Unable to create import folder: {error}"))?;
+        return Ok(base);
+    }
+
+    if !base.exists() {
+        fs::create_dir_all(&base)
+            .map_err(|error| format!("Unable to create import folder: {error}"))?;
+        return Ok(base);
+    }
+
+    let entries = fs::read_dir(&base)
+        .map_err(|error| format!("Unable to inspect existing import folder: {error}"))?
+        .count();
+    if entries == 0 {
+        return Ok(base);
+    }
+
+    Err(format!(
+        "Import folder already exists and is not empty: {}. Enable force overwrite to replace it.",
+        base.to_string_lossy()
+    ))
+}
+
+fn extract_agent_kit_zip(
+    package_path: &Path,
+    destination_root: &Path,
+    extraction_folder: &Path,
+) -> Result<Vec<String>, String> {
+    ensure_child_path(destination_root, extraction_folder)?;
+    let file = File::open(package_path)
+        .map_err(|error| format!("Unable to open package file: {error}"))?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| format!("Unable to read zip package: {error}"))?;
+    let mut files = Vec::new();
+    let strip_root = detect_archive_root_folder(&mut archive)?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Unable to read zip entry: {error}"))?;
+        let enclosed_name = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("Unsafe zip path: {}", entry.name()))?
+            .to_path_buf();
+        let relative_path = strip_archive_root_component(&enclosed_name, strip_root.as_deref());
+        if relative_path.as_os_str().is_empty() {
+            continue;
+        }
+
+        let output_path = extraction_folder.join(&relative_path);
+        ensure_child_path(extraction_folder, &output_path)?;
+
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path)
+                .map_err(|error| format!("Unable to create imported folder: {error}"))?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Unable to create imported folder: {error}"))?;
+        }
+
+        let mut output_file = File::create(&output_path)
+            .map_err(|error| format!("Unable to create imported file: {error}"))?;
+        io::copy(&mut entry, &mut output_file)
+            .map_err(|error| format!("Unable to extract imported file: {error}"))?;
+        files.push(relative_path.to_string_lossy().replace('\\', "/"));
+    }
+
+    files.sort();
+    Ok(files)
+}
+
+fn detect_archive_root_folder(
+    archive: &mut ZipArchive<File>,
+) -> Result<Option<String>, String> {
+    let mut common_root: Option<String> = None;
+    let mut has_root_manifest = false;
+
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Unable to inspect zip entry: {error}"))?;
+        let enclosed_name = entry
+            .enclosed_name()
+            .ok_or_else(|| format!("Unsafe zip path: {}", entry.name()))?
+            .to_path_buf();
+
+        if enclosed_name.as_os_str().is_empty() {
+            continue;
+        }
+
+        if enclosed_name == Path::new("agentkit.yaml") {
+            has_root_manifest = true;
+        }
+
+        let mut components = enclosed_name.components();
+        let Some(first) = components.next() else {
+            continue;
+        };
+        if components.as_path().as_os_str().is_empty() {
+            continue;
+        }
+
+        let first_component = first.as_os_str().to_string_lossy().to_string();
+        match &common_root {
+            Some(existing) if existing != &first_component => return Ok(None),
+            Some(_) => {}
+            None => common_root = Some(first_component),
+        }
+    }
+
+    if has_root_manifest {
+        Ok(None)
+    } else {
+        Ok(common_root)
+    }
+}
+
+fn strip_archive_root_component(relative_path: &Path, root: Option<&str>) -> PathBuf {
+    let Some(root) = root else {
+        return relative_path.to_path_buf();
+    };
+
+    let mut components = relative_path.components();
+    let Some(first) = components.next() else {
+        return PathBuf::new();
+    };
+
+    if first.as_os_str().to_string_lossy() == root {
+        components.as_path().to_path_buf()
+    } else {
+        relative_path.to_path_buf()
+    }
+}
+
+fn ensure_child_path(root: &Path, child: &Path) -> Result<(), String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("Unable to resolve destination root: {error}"))?;
+    let child_parent = if child.exists() {
+        child
+            .canonicalize()
+            .map_err(|error| format!("Unable to resolve destination path: {error}"))?
+    } else {
+        child
+            .parent()
+            .ok_or_else(|| "Destination path must have a parent folder.".to_string())?
+            .canonicalize()
+            .map_err(|error| format!("Unable to resolve destination parent: {error}"))?
+    };
+
+    if !child_parent.starts_with(&root) && child_parent != root {
+        return Err("Import destination must stay inside the selected destination folder.".to_string());
+    }
+
+    Ok(())
+}
+
 fn read_manifest_scalar(manifest: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     manifest.lines().find_map(|line| {
@@ -1138,6 +1456,7 @@ pub fn run() {
             select_onefile_output_path,
             select_json_file,
             select_json_output_path,
+            select_agent_kit_package_file,
             validate_agent_kit,
             create_agent_kit_from_template,
             export_agent_kit_onefile,
@@ -1157,7 +1476,8 @@ pub fn run() {
             remove_kit_from_library,
             refresh_kit_metadata,
             validate_library_kit,
-            mark_library_kit_used
+            mark_library_kit_used,
+            import_agent_kit_package
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

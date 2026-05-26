@@ -176,6 +176,21 @@ The library is stored in Tauri app-local data as `my-kits.json`. On Windows this
 
 If a kit folder no longer exists, My Kits shows a warning and disables actions that need the folder.
 
+## Import .agentkit.zip Packages
+
+Use **My Kits** to import a downloaded or shared `.agentkit.zip` package:
+
+1. Click **Import .agentkit.zip**.
+2. Select the package file.
+3. Select a destination root folder.
+4. Choose a validation profile.
+5. Enable force overwrite only if replacing the intended import folder is acceptable.
+6. Click **Import package**.
+
+AgentKitForge extracts the package into a subfolder under the selected destination root, based on the package filename. Import validates the extracted kit immediately. Valid imports are added to My Kits automatically. Invalid imports remain extracted so you can inspect the issues, and you can choose to add them to My Kits anyway.
+
+The importer blocks zip path traversal and refuses to overwrite non-empty folders unless force overwrite is enabled.
+
 ## Requirements
 
 - Node.js

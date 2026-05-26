@@ -117,6 +117,13 @@ type MyKitEntry = {
   pathExists: boolean;
 };
 
+type ImportAgentKitPackageResult = {
+  extractedPath: string;
+  validationReport: ValidationReport;
+  metadata: MyKitEntry;
+  files: string[];
+};
+
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
@@ -314,6 +321,17 @@ function MyKitsScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importForm, setImportForm] = useState({
+    packagePath: "",
+    destinationRootFolder: "",
+    force: false,
+    validationProfile: "local-valid" as ValidationProfile,
+  });
+  const [importResult, setImportResult] = useState<ImportAgentKitPackageResult | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isSelectingPackage, setIsSelectingPackage] = useState(false);
+  const [isSelectingDestination, setIsSelectingDestination] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     loadKits();
@@ -348,6 +366,93 @@ function MyKitsScreen({
       setError(errorToMessage(caughtError));
     } finally {
       setIsAdding(false);
+    }
+  }
+
+  function updateImportForm<Key extends keyof typeof importForm>(
+    key: Key,
+    value: (typeof importForm)[Key],
+  ) {
+    setImportForm((current) => ({ ...current, [key]: value }));
+    setImportResult(null);
+    setImportError(null);
+  }
+
+  async function selectPackageFile() {
+    setIsSelectingPackage(true);
+    setImportError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_package_file");
+      if (selectedPath) {
+        updateImportForm("packagePath", selectedPath);
+      }
+    } catch (caughtError) {
+      setImportError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingPackage(false);
+    }
+  }
+
+  async function selectDestinationFolder() {
+    setIsSelectingDestination(true);
+    setImportError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateImportForm("destinationRootFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setImportError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingDestination(false);
+    }
+  }
+
+  async function importPackage() {
+    setIsImporting(true);
+    setImportError(null);
+    setImportResult(null);
+
+    try {
+      if (importForm.packagePath.trim() === "") {
+        throw new Error("Package file is required.");
+      }
+      if (importForm.destinationRootFolder.trim() === "") {
+        throw new Error("Destination folder is required.");
+      }
+
+      const result = await invoke<ImportAgentKitPackageResult>("import_agent_kit_package", {
+        input: importForm,
+      });
+      setImportResult(result);
+
+      if (result.validationReport.valid) {
+        await invoke<MyKitEntry>("add_kit_to_library", {
+          input: { path: result.extractedPath, source: "imported" },
+        });
+        await loadKits();
+      }
+    } catch (caughtError) {
+      setImportError(errorToMessage(caughtError));
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  async function addInvalidImportAnyway() {
+    if (!importResult) {
+      return;
+    }
+
+    try {
+      await invoke<MyKitEntry>("add_kit_to_library", {
+        input: { path: importResult.extractedPath, source: "imported" },
+      });
+      await loadKits();
+    } catch (caughtError) {
+      setImportError(errorToMessage(caughtError));
     }
   }
 
@@ -401,25 +506,53 @@ function MyKitsScreen({
 
   if (kits.length === 0) {
     return (
-      <div className="empty-state">
-        <PackageOpen size={42} strokeWidth={1.8} />
-        <h2>No kits added yet</h2>
-        <p>Add existing Agent Kit folders or build a new kit. Local library entries do not move or copy files.</p>
-        {error && (
-          <div className="error-state" role="alert">
-            {error}
-          </div>
-        )}
-        <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
-          <FolderOpen size={18} />
-          {isAdding ? "Adding" : "Add existing kit folder"}
-        </button>
+      <div className="my-kits-screen">
+        <ImportPackagePanel
+          form={importForm}
+          importError={importError}
+          importResult={importResult}
+          isImporting={isImporting}
+          isSelectingDestination={isSelectingDestination}
+          isSelectingPackage={isSelectingPackage}
+          onAddInvalidImportAnyway={addInvalidImportAnyway}
+          onImportPackage={importPackage}
+          onSelectDestinationFolder={selectDestinationFolder}
+          onSelectPackageFile={selectPackageFile}
+          onUpdateForm={updateImportForm}
+        />
+        <div className="empty-state">
+          <PackageOpen size={42} strokeWidth={1.8} />
+          <h2>No kits added yet</h2>
+          <p>Add existing Agent Kit folders or build a new kit. Local library entries do not move or copy files.</p>
+          {error && (
+            <div className="error-state" role="alert">
+              {error}
+            </div>
+          )}
+          <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
+            <FolderOpen size={18} />
+            {isAdding ? "Adding" : "Add existing kit folder"}
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="my-kits-screen">
+      <ImportPackagePanel
+        form={importForm}
+        importError={importError}
+        importResult={importResult}
+        isImporting={isImporting}
+        isSelectingDestination={isSelectingDestination}
+        isSelectingPackage={isSelectingPackage}
+        onAddInvalidImportAnyway={addInvalidImportAnyway}
+        onImportPackage={importPackage}
+        onSelectDestinationFolder={selectDestinationFolder}
+        onSelectPackageFile={selectPackageFile}
+        onUpdateForm={updateImportForm}
+      />
       <div className="screen-toolbar">
         <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
           <FolderOpen size={18} />
@@ -493,6 +626,162 @@ function MyKitsScreen({
     </div>
   );
 }
+
+function ImportPackagePanel({
+  form,
+  importError,
+  importResult,
+  isImporting,
+  isSelectingDestination,
+  isSelectingPackage,
+  onAddInvalidImportAnyway,
+  onImportPackage,
+  onSelectDestinationFolder,
+  onSelectPackageFile,
+  onUpdateForm,
+}: {
+  form: {
+    packagePath: string;
+    destinationRootFolder: string;
+    force: boolean;
+    validationProfile: ValidationProfile;
+  };
+  importError: string | null;
+  importResult: ImportAgentKitPackageResult | null;
+  isImporting: boolean;
+  isSelectingDestination: boolean;
+  isSelectingPackage: boolean;
+  onAddInvalidImportAnyway: () => void;
+  onImportPackage: () => void;
+  onSelectDestinationFolder: () => void;
+  onSelectPackageFile: () => void;
+  onUpdateForm: <Key extends keyof ImportPackagePanelProps["form"]>(
+    key: Key,
+    value: ImportPackagePanelProps["form"][Key],
+  ) => void;
+}) {
+  return (
+    <div className="form-panel import-panel">
+      <h2>Import .agentkit.zip</h2>
+
+      <label htmlFor="import-package-file">Package file</label>
+      <div className="path-picker">
+        <input
+          id="import-package-file"
+          onChange={(event) => onUpdateForm("packagePath", event.target.value)}
+          placeholder="C:\\kits\\downloads\\example.agentkit.zip"
+          value={form.packagePath}
+        />
+        <button
+          className="icon-button"
+          disabled={isSelectingPackage || isImporting}
+          onClick={onSelectPackageFile}
+          title="Select package"
+          type="button"
+        >
+          <FileArchive size={18} />
+        </button>
+      </div>
+
+      <label htmlFor="import-destination-folder">Destination root folder</label>
+      <div className="path-picker">
+        <input
+          id="import-destination-folder"
+          onChange={(event) => onUpdateForm("destinationRootFolder", event.target.value)}
+          placeholder="C:\\kits\\imported"
+          value={form.destinationRootFolder}
+        />
+        <button
+          className="icon-button"
+          disabled={isSelectingDestination || isImporting}
+          onClick={onSelectDestinationFolder}
+          title="Select destination folder"
+          type="button"
+        >
+          <FolderOpen size={18} />
+        </button>
+      </div>
+
+      <label htmlFor="import-validation-profile">Validation profile</label>
+      <select
+        id="import-validation-profile"
+        onChange={(event) => onUpdateForm("validationProfile", event.target.value as ValidationProfile)}
+        value={form.validationProfile}
+      >
+        {validationProfiles.map((profile) => (
+          <option key={profile} value={profile}>
+            {profile}
+          </option>
+        ))}
+      </select>
+
+      <label className="checkbox-row" htmlFor="import-force">
+        <input
+          checked={form.force}
+          id="import-force"
+          onChange={(event) => onUpdateForm("force", event.target.checked)}
+          type="checkbox"
+        />
+        <span>Force overwrite existing import folder</span>
+      </label>
+
+      <button className="primary-button" disabled={isImporting} onClick={onImportPackage} type="button">
+        <PackageOpen size={18} />
+        {isImporting ? "Importing" : "Import package"}
+      </button>
+
+      {importError && (
+        <div className="error-state" role="alert">
+          {importError}
+        </div>
+      )}
+
+      {importResult && (
+        <div className="import-result">
+          <div className={`status-banner ${importResult.validationReport.valid ? "valid" : "invalid"}`}>
+            <strong>{importResult.validationReport.valid ? "Imported and valid" : "Imported with issues"}</strong>
+            <span>{importResult.validationReport.profile}</span>
+          </div>
+          <dl className="report-meta">
+            <div>
+              <dt>Extracted path</dt>
+              <dd>{importResult.extractedPath}</dd>
+            </div>
+            <div>
+              <dt>Kit</dt>
+              <dd>{importResult.metadata.name} {importResult.metadata.version}</dd>
+            </div>
+          </dl>
+          {!importResult.validationReport.valid && (
+            <>
+              <IssueGroup issues={importResult.validationReport.issues.filter((issue) => issue.severity === "error")} severity="error" />
+              <button className="secondary-button compact-button" onClick={onAddInvalidImportAnyway} type="button">
+                Add to My Kits anyway
+              </button>
+            </>
+          )}
+          <div className="created-files">
+            <h3>Extracted files</h3>
+            <ul>
+              {importResult.files.map((file) => (
+                <li key={file}>{file}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ImportPackagePanelProps = {
+  form: {
+    packagePath: string;
+    destinationRootFolder: string;
+    force: boolean;
+    validationProfile: ValidationProfile;
+  };
+};
 
 function BuildScreen({
   onKitReady,
