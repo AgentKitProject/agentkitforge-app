@@ -57,6 +57,23 @@ type RenderAgentKitDraftInput = {
   force: boolean;
 };
 
+type GenerateAgentKitDraftInput = {
+  userRequest: string;
+  targetUsers: string;
+  domain: string;
+  desiredValidationLevel: ValidationProfile;
+  constraints: string;
+  sourceNotes: string;
+  model: string;
+};
+
+type GenerateAgentKitDraftResult = {
+  draftJson: unknown;
+  draftJsonPretty: string;
+  warnings: string[];
+  model: string;
+};
+
 type CreateAgentKitInput = {
   outputFolder: string;
   id: string;
@@ -189,6 +206,7 @@ export function App() {
           {activeSection === "my-kits" && <MyKitsScreen />}
           {activeSection === "build" && (
             <BuildScreen
+              settings={settings}
               onValidateCreatedKit={(rootPath, profile) => {
                 updateAppState("currentKitPath", rootPath);
                 updateAppState("preferredValidationProfile", profile);
@@ -240,8 +258,10 @@ function MyKitsScreen() {
 
 function BuildScreen({
   onValidateCreatedKit,
+  settings,
 }: {
   onValidateCreatedKit: (rootPath: string, profile: ValidationProfile) => void;
+  settings: PublicSettings;
 }) {
   const [form, setForm] = useState<CreateAgentKitInput>({
     outputFolder: "",
@@ -271,6 +291,34 @@ function BuildScreen({
   const [isSelectingDraftFile, setIsSelectingDraftFile] = useState(false);
   const [isSelectingDraftOutput, setIsSelectingDraftOutput] = useState(false);
   const [isRenderingDraft, setIsRenderingDraft] = useState(false);
+  const [aiForm, setAiForm] = useState<GenerateAgentKitDraftInput>({
+    userRequest: "",
+    targetUsers: "",
+    domain: "",
+    desiredValidationLevel: "local-valid",
+    constraints: "",
+    sourceNotes: "",
+    model: settings.defaultModel || defaultRuntimeModel,
+  });
+  const [aiResult, setAiResult] = useState<GenerateAgentKitDraftResult | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiFieldErrors, setAiFieldErrors] = useState<
+    Partial<Record<keyof GenerateAgentKitDraftInput | "apiKey", string>>
+  >({});
+  const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
+  const [draftCopyState, setDraftCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [draftSavePath, setDraftSavePath] = useState<string | null>(null);
+  const [generatedRenderOutputFolder, setGeneratedRenderOutputFolder] = useState("");
+  const [generatedRenderForce, setGeneratedRenderForce] = useState(false);
+  const [generatedRenderResult, setGeneratedRenderResult] =
+    useState<RenderAgentKitDraftResult | null>(null);
+  const [generatedRenderError, setGeneratedRenderError] = useState<string | null>(null);
+  const [isSelectingGeneratedRenderOutput, setIsSelectingGeneratedRenderOutput] = useState(false);
+  const [isRenderingGeneratedDraft, setIsRenderingGeneratedDraft] = useState(false);
+
+  useEffect(() => {
+    setAiForm((current) => ({ ...current, model: settings.defaultModel || defaultRuntimeModel }));
+  }, [settings.defaultModel]);
 
   function updateForm<Key extends keyof CreateAgentKitInput>(
     key: Key,
@@ -306,6 +354,20 @@ function BuildScreen({
     setDraftResult(null);
     setDraftError(null);
     setDraftFieldErrors((current) => ({ ...current, [key]: undefined }));
+  }
+
+  function updateAiForm<Key extends keyof GenerateAgentKitDraftInput>(
+    key: Key,
+    value: GenerateAgentKitDraftInput[Key],
+  ) {
+    setAiForm((current) => ({ ...current, [key]: value }));
+    setAiResult(null);
+    setAiError(null);
+    setDraftCopyState("idle");
+    setDraftSavePath(null);
+    setGeneratedRenderResult(null);
+    setGeneratedRenderError(null);
+    setAiFieldErrors((current) => ({ ...current, [key]: undefined }));
   }
 
   async function selectDraftFile() {
@@ -388,13 +450,241 @@ function BuildScreen({
     }
   }
 
+  async function generateDraftWithOpenAI() {
+    const validationErrors = validateGenerateDraftForm(settings, aiForm);
+    setAiFieldErrors(validationErrors);
+    setAiError(null);
+    setAiResult(null);
+    setDraftSavePath(null);
+    setDraftCopyState("idle");
+    setGeneratedRenderResult(null);
+    setGeneratedRenderError(null);
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsGeneratingDraft(true);
+
+    try {
+      const result = await invoke<GenerateAgentKitDraftResult>(
+        "generate_agent_kit_draft_with_openai",
+        { input: aiForm },
+      );
+      setAiResult(result);
+    } catch (caughtError) {
+      setAiError(errorToMessage(caughtError));
+    } finally {
+      setIsGeneratingDraft(false);
+    }
+  }
+
+  async function copyGeneratedDraftJson() {
+    if (!aiResult) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(aiResult.draftJsonPretty);
+      setDraftCopyState("copied");
+    } catch {
+      setDraftCopyState("failed");
+    }
+  }
+
+  async function saveGeneratedDraftJson() {
+    if (!aiResult) {
+      return;
+    }
+
+    setAiError(null);
+
+    try {
+      const outputPath = await invoke<string | null>("select_json_output_path");
+      if (!outputPath) {
+        return;
+      }
+
+      const saveResult = await invoke<{ filePath: string }>("save_agent_kit_draft_json", {
+        input: { draftJson: aiResult.draftJson },
+        outputPath,
+      });
+      setDraftSavePath(saveResult.filePath);
+    } catch (caughtError) {
+      setAiError(errorToMessage(caughtError));
+    }
+  }
+
+  async function selectGeneratedRenderOutputFolder() {
+    setIsSelectingGeneratedRenderOutput(true);
+    setGeneratedRenderError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setGeneratedRenderOutputFolder(selectedPath);
+        setGeneratedRenderResult(null);
+      }
+    } catch (caughtError) {
+      setGeneratedRenderError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingGeneratedRenderOutput(false);
+    }
+  }
+
+  async function renderGeneratedDraft() {
+    if (!aiResult) {
+      return;
+    }
+
+    if (generatedRenderOutputFolder.trim() === "") {
+      setGeneratedRenderError("Output folder is required to render this draft.");
+      return;
+    }
+
+    setIsRenderingGeneratedDraft(true);
+    setGeneratedRenderError(null);
+    setGeneratedRenderResult(null);
+
+    try {
+      const result = await invoke<RenderAgentKitDraftResult>("render_generated_agent_kit_draft", {
+        input: {
+          draftJson: aiResult.draftJson,
+          outputFolder: generatedRenderOutputFolder,
+          force: generatedRenderForce,
+        },
+      });
+      setGeneratedRenderResult(result);
+    } catch (caughtError) {
+      setGeneratedRenderError(errorToMessage(caughtError));
+    } finally {
+      setIsRenderingGeneratedDraft(false);
+    }
+  }
+
   const validationProfile = defaultValidationProfileForTemplate(result?.template ?? form.template);
 
   return (
     <div className="build-screen">
       <div className="build-layout">
         <div className="form-panel">
-        <h2>Create from template</h2>
+          <h2>Build with OpenAI</h2>
+
+          {!settings.hasOpenaiApiKey && (
+            <div className="inline-warning">Add an OpenAI API key in Settings before generating drafts.</div>
+          )}
+
+          <label htmlFor="ai-user-request">Describe the Agent Kit you want</label>
+          <textarea
+            id="ai-user-request"
+            onChange={(event) => updateAiForm("userRequest", event.target.value)}
+            placeholder="Describe the Agent Kit's purpose, skills, workflows, and expected outputs."
+            rows={5}
+            value={aiForm.userRequest}
+          />
+          <FieldError message={aiFieldErrors.userRequest} />
+          <FieldError message={aiFieldErrors.apiKey} />
+
+          <label htmlFor="ai-domain">Domain</label>
+          <input
+            id="ai-domain"
+            onChange={(event) => updateAiForm("domain", event.target.value)}
+            placeholder="Finance, support, legal ops, software delivery..."
+            value={aiForm.domain}
+          />
+
+          <label htmlFor="ai-target-users">Target users</label>
+          <input
+            id="ai-target-users"
+            onChange={(event) => updateAiForm("targetUsers", event.target.value)}
+            placeholder="Analysts, managers, operators"
+            value={aiForm.targetUsers}
+          />
+
+          <label htmlFor="ai-validation-level">Desired validation level</label>
+          <select
+            id="ai-validation-level"
+            onChange={(event) =>
+              updateAiForm("desiredValidationLevel", event.target.value as ValidationProfile)
+            }
+            value={aiForm.desiredValidationLevel}
+          >
+            {validationProfiles.map((profile) => (
+              <option key={profile} value={profile}>
+                {profile}
+              </option>
+            ))}
+          </select>
+          <FieldError message={aiFieldErrors.desiredValidationLevel} />
+
+          <label htmlFor="ai-constraints">Constraints</label>
+          <textarea
+            id="ai-constraints"
+            onChange={(event) => updateAiForm("constraints", event.target.value)}
+            placeholder="Optional constraints, one per line or comma-separated."
+            rows={3}
+            value={aiForm.constraints}
+          />
+
+          <label htmlFor="ai-source-notes">Source notes</label>
+          <textarea
+            id="ai-source-notes"
+            onChange={(event) => updateAiForm("sourceNotes", event.target.value)}
+            placeholder="Optional notes to ground the generated draft."
+            rows={3}
+            value={aiForm.sourceNotes}
+          />
+
+          <label htmlFor="ai-model">Model</label>
+          <input
+            id="ai-model"
+            onChange={(event) => updateAiForm("model", event.target.value)}
+            value={aiForm.model}
+          />
+
+          <button
+            className="primary-button"
+            disabled={isGeneratingDraft}
+            onClick={generateDraftWithOpenAI}
+            type="button"
+          >
+            <Sparkles size={18} />
+            {isGeneratingDraft ? "Generating" : "Generate Draft"}
+          </button>
+        </div>
+
+        <div className="results-panel">
+          <div className="panel-label">Generated Draft</div>
+          <GeneratedDraftResults
+            copyState={draftCopyState}
+            error={aiError}
+            isLoading={isGeneratingDraft}
+            onCopyJson={copyGeneratedDraftJson}
+            onRenderDraft={renderGeneratedDraft}
+            onSaveJson={saveGeneratedDraftJson}
+            result={aiResult}
+            savePath={draftSavePath}
+            renderOutputFolder={generatedRenderOutputFolder}
+            onRenderOutputFolderChange={(value) => {
+              setGeneratedRenderOutputFolder(value);
+              setGeneratedRenderError(null);
+              setGeneratedRenderResult(null);
+            }}
+            onSelectRenderOutputFolder={selectGeneratedRenderOutputFolder}
+            renderForce={generatedRenderForce}
+            onRenderForceChange={setGeneratedRenderForce}
+            renderError={generatedRenderError}
+            renderResult={generatedRenderResult}
+            isSelectingRenderOutput={isSelectingGeneratedRenderOutput}
+            isRenderingDraft={isRenderingGeneratedDraft}
+            onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
+          />
+        </div>
+      </div>
+
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Create from template</h2>
 
         <label htmlFor="build-output-folder">Target output folder</label>
         <div className="path-picker">
@@ -562,13 +852,6 @@ function BuildScreen({
         </div>
       </div>
 
-      <div className="screen-grid compact">
-        <PlaceholderCard
-          description="Generate a draft request and build kit content with an OpenAI-assisted workflow."
-          icon={Sparkles}
-          title="Build with OpenAI"
-        />
-      </div>
     </div>
   );
 }
@@ -1518,6 +1801,171 @@ function RenderAgentKitDraftResults({
   );
 }
 
+function GeneratedDraftResults({
+  copyState,
+  error,
+  isLoading,
+  isRenderingDraft,
+  isSelectingRenderOutput,
+  onCopyJson,
+  onRenderDraft,
+  onRenderForceChange,
+  onRenderOutputFolderChange,
+  onSaveJson,
+  onSelectRenderOutputFolder,
+  onValidateRenderedKit,
+  renderError,
+  renderForce,
+  renderOutputFolder,
+  renderResult,
+  result,
+  savePath,
+}: {
+  copyState: "idle" | "copied" | "failed";
+  error: string | null;
+  isLoading: boolean;
+  isRenderingDraft: boolean;
+  isSelectingRenderOutput: boolean;
+  onCopyJson: () => void;
+  onRenderDraft: () => void;
+  onRenderForceChange: (value: boolean) => void;
+  onRenderOutputFolderChange: (value: string) => void;
+  onSaveJson: () => void;
+  onSelectRenderOutputFolder: () => void;
+  onValidateRenderedKit: (rootPath: string) => void;
+  renderError: string | null;
+  renderForce: boolean;
+  renderOutputFolder: string;
+  renderResult: RenderAgentKitDraftResult | null;
+  result: GenerateAgentKitDraftResult | null;
+  savePath: string | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Generating AgentKitDraft JSON with OpenAI...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <p className="state-copy">
+        Generate a draft JSON object, review it, then save it or render it into an Agent Kit folder.
+      </p>
+    );
+  }
+
+  return (
+    <div className="generated-draft-result">
+      <div className="status-banner valid">
+        <strong>Draft generated</strong>
+        <span>{result.model}</span>
+      </div>
+
+      {result.warnings.length > 0 && (
+        <div className="inline-warning">
+          {result.warnings.map((warning) => (
+            <div key={warning}>{warning}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="button-row">
+        <button className="secondary-button" onClick={onCopyJson} type="button">
+          Copy JSON
+        </button>
+        <button className="secondary-button" onClick={onSaveJson} type="button">
+          Save draft JSON
+        </button>
+      </div>
+
+      {copyState === "copied" && <div className="copy-state">JSON copied to clipboard.</div>}
+      {copyState === "failed" && (
+        <div className="field-error">Clipboard access failed. Select and copy the JSON text.</div>
+      )}
+      {savePath && <div className="copy-state">Saved to {savePath}</div>}
+
+      <pre className="json-panel">{result.draftJsonPretty}</pre>
+
+      <div className="render-generated-panel">
+        <h3>Render this draft</h3>
+        <label htmlFor="generated-render-output">Target output folder</label>
+        <div className="path-picker">
+          <input
+            id="generated-render-output"
+            onChange={(event) => onRenderOutputFolderChange(event.target.value)}
+            placeholder="C:\\kits\\generated-agent-kit"
+            value={renderOutputFolder}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelectingRenderOutput || isRenderingDraft}
+            onClick={onSelectRenderOutputFolder}
+            title="Select output folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+
+        <label className="checkbox-row" htmlFor="generated-render-force">
+          <input
+            checked={renderForce}
+            id="generated-render-force"
+            onChange={(event) => onRenderForceChange(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Force overwrite generated files</span>
+        </label>
+
+        <button
+          className="primary-button"
+          disabled={isRenderingDraft}
+          onClick={onRenderDraft}
+          type="button"
+        >
+          <FileArchive size={18} />
+          {isRenderingDraft ? "Rendering" : "Render this draft"}
+        </button>
+
+        {renderError && (
+          <div className="error-state" role="alert">
+            {renderError}
+          </div>
+        )}
+
+        {renderResult && (
+          <div className="create-result">
+            <div className="status-banner valid">
+              <strong>Rendered</strong>
+              <span>{renderResult.files.length} file{renderResult.files.length === 1 ? "" : "s"}</span>
+            </div>
+            <dl className="report-meta">
+              <div>
+                <dt>Root path</dt>
+                <dd>{renderResult.rootPath}</dd>
+              </div>
+            </dl>
+            <button
+              className="primary-button"
+              onClick={() => onValidateRenderedKit(renderResult.rootPath)}
+              type="button"
+            >
+              <CheckCircle2 size={18} />
+              Validate rendered kit
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FieldError({ message }: { message?: string }) {
   if (!message) {
     return null;
@@ -1563,6 +2011,24 @@ function validateDraftRenderForm(form: RenderAgentKitDraftInput) {
 
   if (form.outputFolder.trim() === "") {
     errors.outputFolder = "Output folder is required.";
+  }
+
+  return errors;
+}
+
+function validateGenerateDraftForm(settings: PublicSettings, form: GenerateAgentKitDraftInput) {
+  const errors: Partial<Record<keyof GenerateAgentKitDraftInput | "apiKey", string>> = {};
+
+  if (!settings.hasOpenaiApiKey) {
+    errors.apiKey = "OpenAI API key is required. Save it in Settings first.";
+  }
+
+  if (form.userRequest.trim() === "") {
+    errors.userRequest = "Describe the Agent Kit you want.";
+  }
+
+  if (!validationProfiles.includes(form.desiredValidationLevel)) {
+    errors.desiredValidationLevel = "Desired validation level is required.";
   }
 
   return errors;

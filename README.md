@@ -88,6 +88,30 @@ Open the Build section and use **Render from Draft JSON** when you already have 
 
 Draft JSON is the handoff format for the AI-assisted builder flow. Later, AgentKitForge will generate these drafts from natural-language requests; for now, you can render draft JSON produced by `agentkitforge-core` or checked into local examples.
 
+## Build With OpenAI
+
+Open Settings and save an OpenAI API key before using **Build with OpenAI**.
+
+In the Build section, describe the Agent Kit you want and optionally provide:
+
+- Domain
+- Target users
+- Desired validation level
+- Constraints
+- Source notes
+- Model override
+
+AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to OpenAI, parses the returned AgentKitDraft JSON, and validates it against the core draft schema. Review the generated JSON before rendering it.
+
+After generation, you can:
+
+- Copy the draft JSON.
+- Save the draft JSON to disk.
+- Render the draft into an Agent Kit folder.
+- Validate the rendered kit.
+
+Draft JSON is the review and handoff step between AI-assisted planning and local kit generation. You can edit saved drafts before rendering, or render them immediately and iterate on the generated kit files.
+
 ## Export a One-File Markdown Bundle
 
 Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web assistant:

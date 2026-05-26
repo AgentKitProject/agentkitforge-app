@@ -92,6 +92,47 @@ struct RenderAgentKitDraftResult {
     files: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateAgentKitDraftInput {
+    user_request: String,
+    target_users: Option<String>,
+    domain: Option<String>,
+    desired_validation_level: ValidationProfile,
+    constraints: Option<String>,
+    source_notes: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateAgentKitDraftResult {
+    draft_json: serde_json::Value,
+    draft_json_pretty: String,
+    warnings: Vec<String>,
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAgentKitDraftJsonInput {
+    draft_json: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderGeneratedAgentKitDraftInput {
+    draft_json: serde_json::Value,
+    output_folder: String,
+    force: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveAgentKitDraftJsonResult {
+    file_path: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ValidationIssue {
     severity: String,
@@ -140,6 +181,17 @@ fn select_json_file() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn select_json_output_path() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Save AgentKitDraft JSON")
+        .add_filter("JSON", &["json"])
+        .set_file_name("agent-kit-draft.json")
+        .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn validate_agent_kit<R: Runtime>(
     app: tauri::AppHandle<R>,
     root_path: String,
@@ -177,7 +229,7 @@ fn create_agent_kit_from_template<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: CreateAgentKitFromTemplateInput,
 ) -> Result<CreateAgentKitResult, String> {
-    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let output_folder = resolve_target_directory(&input.output_folder)?;
     let id = clean_required_value("Kit id", &input.id)?;
     let name = clean_required_value("Kit name", &input.name)?;
     let description = clean_required_value("Kit description", &input.description)?;
@@ -257,7 +309,7 @@ fn render_agent_kit_draft<R: Runtime>(
     input: RenderAgentKitDraftInput,
 ) -> Result<RenderAgentKitDraftResult, String> {
     let draft_file_path = canonicalize_json_file(&input.draft_file_path)?;
-    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let output_folder = resolve_target_directory(&input.output_folder)?;
     let bridge_script = resolve_render_draft_bridge(&app)?;
     let node_command = resolve_node_command()?;
 
@@ -283,6 +335,107 @@ fn render_agent_kit_draft<R: Runtime>(
 
     serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Unable to parse draft render result: {error}"))
+}
+
+#[tauri::command]
+fn render_generated_agent_kit_draft<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: RenderGeneratedAgentKitDraftInput,
+) -> Result<RenderAgentKitDraftResult, String> {
+    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let bridge_script = resolve_render_generated_draft_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+    let draft_json = serde_json::to_string(&input.draft_json)
+        .map_err(|error| format!("Unable to serialize generated draft JSON: {error}"))?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(draft_json)
+        .arg(&output_folder)
+        .arg(if input.force { "true" } else { "false" })
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run generated draft render: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "Generated draft render failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse generated draft render result: {error}"))
+}
+
+#[tauri::command]
+fn generate_agent_kit_draft_with_openai<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: GenerateAgentKitDraftInput,
+) -> Result<GenerateAgentKitDraftResult, String> {
+    let user_request = clean_required_value("Describe the Agent Kit you want", &input.user_request)?;
+    let api_key = settings::get_openai_api_key(&app)?;
+    let model = input
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("gpt-5-mini")
+        .to_string();
+    let bridge_script = resolve_generate_draft_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let request = serde_json::json!({
+        "userRequest": user_request,
+        "targetUsers": split_lines_or_commas(input.target_users.as_deref()),
+        "domain": clean_optional(input.domain.as_deref()),
+        "desiredValidationLevel": input.desired_validation_level.as_str(),
+        "constraints": split_lines_or_commas(input.constraints.as_deref()),
+        "sourceNotes": split_lines_or_commas(input.source_notes.as_deref()),
+        "model": model,
+    });
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .env("AGENTKITFORGE_OPENAI_API_KEY", api_key)
+        .arg(serde_json::to_string(&request).map_err(|error| error.to_string())?)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run OpenAI draft generation: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "OpenAI draft generation failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse generated draft result: {error}"))
+}
+
+#[tauri::command]
+fn save_agent_kit_draft_json(
+    input: SaveAgentKitDraftJsonInput,
+    output_path: String,
+) -> Result<SaveAgentKitDraftJsonResult, String> {
+    let output_path = resolve_json_output_path(&output_path)?;
+    let content = serde_json::to_string_pretty(&input.draft_json)
+        .map_err(|error| format!("Unable to serialize draft JSON: {error}"))?;
+    fs::write(&output_path, format!("{content}\n"))
+        .map_err(|error| format!("Unable to save draft JSON: {error}"))?;
+
+    Ok(SaveAgentKitDraftJsonResult {
+        file_path: output_path.to_string_lossy().into_owned(),
+    })
 }
 
 #[tauri::command]
@@ -360,6 +513,41 @@ fn canonicalize_json_file(file_path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn resolve_target_directory(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a target output folder before rendering.".to_string());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+    if candidate.exists() {
+        let resolved = candidate
+            .canonicalize()
+            .map_err(|error| format!("Unable to access target output folder: {error}"))?;
+        if !resolved.is_dir() {
+            return Err("Target output path is not a folder.".to_string());
+        }
+        return Ok(resolved);
+    }
+
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| "Target output folder must have a parent folder.".to_string())?;
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Unable to access target output parent folder: {error}"))?;
+
+    if !canonical_parent.is_dir() {
+        return Err("Target output parent path is not a folder.".to_string());
+    }
+
+    let folder_name = candidate
+        .file_name()
+        .ok_or_else(|| "Target output folder must include a folder name.".to_string())?;
+
+    Ok(canonical_parent.join(folder_name))
+}
+
 
 fn resolve_validation_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "validate-agent-kit.mjs")
@@ -375,6 +563,16 @@ fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
 
 fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "render-agent-kit-draft.mjs")
+}
+
+fn resolve_generate_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "generate-agent-kit-draft.mjs")
+}
+
+fn resolve_render_generated_draft_bridge<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "render-generated-agent-kit-draft.mjs")
 }
 
 fn resolve_backend_script<R: Runtime>(
@@ -489,6 +687,55 @@ fn resolve_markdown_output_path(root_path: &Path, output_path: &str) -> Result<P
     Ok(canonical_parent.join(file_name))
 }
 
+fn resolve_json_output_path(output_path: &str) -> Result<PathBuf, String> {
+    let trimmed = output_path.trim();
+    if trimmed.is_empty() {
+        return Err("Select a draft JSON output path before saving.".to_string());
+    }
+
+    let mut file_path = PathBuf::from(trimmed);
+    if file_path.extension().is_none() {
+        file_path.set_extension("json");
+    }
+
+    let parent = file_path
+        .parent()
+        .ok_or_else(|| "Draft JSON output path must have a parent folder.".to_string())?;
+
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Unable to access draft JSON output folder: {error}"))?;
+
+    if !canonical_parent.is_dir() {
+        return Err("Draft JSON output parent path is not a folder.".to_string());
+    }
+
+    let file_name = file_path
+        .file_name()
+        .ok_or_else(|| "Draft JSON output path must include a file name.".to_string())?;
+
+    Ok(canonical_parent.join(file_name))
+}
+
+fn clean_optional(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string)
+}
+
+fn split_lines_or_commas(value: Option<&str>) -> Option<Vec<String>> {
+    let values = value?
+        .split(|character| character == '\n' || character == ',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+    if values.is_empty() {
+        None
+    } else {
+        Some(values)
+    }
+}
+
 fn default_markdown_file_name(root_path: &Path) -> String {
     let stem = root_path
         .file_name()
@@ -506,10 +753,14 @@ pub fn run() {
             select_agent_kit_folder,
             select_onefile_output_path,
             select_json_file,
+            select_json_output_path,
             validate_agent_kit,
             create_agent_kit_from_template,
             export_agent_kit_onefile,
             render_agent_kit_draft,
+            render_generated_agent_kit_draft,
+            generate_agent_kit_draft_with_openai,
+            save_agent_kit_draft_json,
             get_app_settings,
             save_openai_api_key,
             clear_openai_api_key,
