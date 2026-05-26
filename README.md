@@ -57,6 +57,37 @@ Create a packaged Tauri desktop build:
 npm run build:tauri
 ```
 
+## Release Build
+
+For a v0.1 release build on Windows, run:
+
+```sh
+npm run check
+npm run build:tauri
+```
+
+Tauri writes Windows installer artifacts under:
+
+```text
+src-tauri/target/release/bundle/msi/
+src-tauri/target/release/bundle/nsis/
+```
+
+The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` installer. Code signing is not configured yet, so Windows may show unsigned-app warnings. macOS and Linux packages are future work unless built manually on those platforms.
+
+The current app icon is a placeholder at `src-tauri/icons/icon.ico`. Replace that file and update `src-tauri/tauri.conf.json` if a full icon set is added later.
+
+### Build Verification Checklist
+
+- Run `npm run check`.
+- Run `npm run build:tauri`.
+- Create a kit from a template.
+- Validate a kit.
+- Run a kit with OpenAI inside Forge.
+- Package/export a kit.
+- Import a `.agentkit.zip` package.
+- Export a kit to a Codex skills directory.
+
 ## Create a Kit From a Template
 
 Open the Build section and fill in:
@@ -193,6 +224,7 @@ The response metadata panel shows the kit name when available, model used, conte
 - Package / Export
 - Install Targets
 - Settings
+- About
 
 ## Install Targets
 
@@ -223,6 +255,10 @@ Settings controls local app defaults and OpenAI access:
 Use **Test OpenAI connection** after saving an API key. It sends a very small request with the selected/default model and reports success or a readable failure. The key is not printed by the app.
 
 Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. For v0.1 the OpenAI API key is stored in that local settings file, not in an OS keychain. Do not share local app data or commit generated settings files.
+
+## About
+
+The About screen shows the AgentKitForge version, product description, placeholder links for AgentKitForge.com, AgentKitMarket.com, and the GitHub repo, plus local-only privacy and OpenAI API key storage notes.
 
 ## My Kits Library
 

@@ -5,6 +5,7 @@ import {
   FolderOutput,
   FolderOpen,
   Hammer,
+  Info,
   Plug,
   KeyRound,
   PackageOpen,
@@ -17,7 +18,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
-type ExtendedSectionId = SectionId | "package-export" | "install-targets";
+type ExtendedSectionId = SectionId | "package-export" | "install-targets" | "about";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
@@ -180,6 +181,7 @@ const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
 const starterPrompt =
   "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
 const defaultRuntimeModel = "gpt-5-mini";
+const appVersion = "0.1.0";
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -189,6 +191,7 @@ const navItems: NavItem[] = [
   { id: "package-export" as ExtendedSectionId, label: "Package / Export", icon: FolderOutput },
   { id: "install-targets", label: "Install Targets", icon: Plug },
   { id: "settings", label: "Settings", icon: Settings },
+  { id: "about", label: "About", icon: Info },
 ];
 
 export function App() {
@@ -363,6 +366,7 @@ export function App() {
               settings={settings}
             />
           )}
+          {activeSection === "about" && <AboutScreen settings={settings} />}
         </section>
       </main>
     </div>
@@ -3503,6 +3507,64 @@ function SettingsScreen({
       >
         {isSavingPreferences ? "Saving" : "Save preferences"}
       </button>
+    </div>
+  );
+}
+
+function AboutScreen({ settings }: { settings: PublicSettings }) {
+  return (
+    <div className="about-screen">
+      <section className="form-panel about-panel">
+        <div className="about-header">
+          <div className="brand-mark about-mark">
+            <Wrench size={22} strokeWidth={2.2} />
+          </div>
+          <div>
+            <h2>AgentKitForge</h2>
+            <p>Version {appVersion}</p>
+          </div>
+        </div>
+
+        <p className="form-copy">
+          AgentKitForge is a downloadable desktop app for building, validating, packaging,
+          installing, and using portable Agent Kits.
+        </p>
+
+        <dl className="report-meta about-meta">
+          <div>
+            <dt>App mode</dt>
+            <dd>Local desktop workspace</dd>
+          </div>
+          <div>
+            <dt>Settings file</dt>
+            <dd>{settings.settingsPath || "Resolved by Tauri app-local data at runtime"}</dd>
+          </div>
+        </dl>
+
+        <div className="about-links">
+          <a href="https://AgentKitForge.com" target="_blank" rel="noreferrer">
+            AgentKitForge.com
+          </a>
+          <a href="https://AgentKitMarket.com" target="_blank" rel="noreferrer">
+            AgentKitMarket.com
+          </a>
+          <a href="https://github.com/agentkitforge/agentkitforge-app" target="_blank" rel="noreferrer">
+            GitHub repo placeholder
+          </a>
+        </div>
+      </section>
+
+      <section className="form-panel about-panel">
+        <h2>Privacy and Storage</h2>
+        <p className="form-copy">
+          AgentKitForge stores My Kits entries and app preferences locally on this machine. It does
+          not require an account and does not sync local library data remotely.
+        </p>
+        <div className="inline-warning">
+          For v0.1, the OpenAI API key is stored in local app data, not an OS keychain. Do not share
+          local app data or commit generated settings files.
+        </div>
+      </section>
     </div>
   );
 }

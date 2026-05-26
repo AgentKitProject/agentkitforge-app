@@ -352,6 +352,66 @@ textarea {
   max-width: 620px;
 }
 
+.about-screen {
+  display: grid;
+  grid-template-columns: minmax(340px, 620px) minmax(300px, 460px);
+  gap: 22px;
+  align-items: start;
+}
+
+.about-panel {
+  gap: 16px;
+}
+
+.about-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.about-header h2 {
+  margin: 0;
+  font-size: 1.28rem;
+}
+
+.about-header p {
+  margin: 4px 0 0;
+  color: #596579;
+}
+
+.about-mark {
+  flex: 0 0 auto;
+}
+
+.about-meta {
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
+.about-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.about-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  color: #203049;
+  text-decoration: none;
+  background: #ffffff;
+  border: 1px solid #ccd3dd;
+  border-radius: 8px;
+}
+
+.about-links a:hover {
+  background: #f2f5f8;
+}
+
 .results-panel {
   min-height: 260px;
   padding: 22px;
@@ -920,7 +980,7 @@ textarea {
   }
 
   .nav-list {
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(8, minmax(0, 1fr));
   }
 
   .nav-item {
@@ -936,6 +996,7 @@ textarea {
   }
 
   .topbar,
+  .about-screen,
   .form-layout {
     grid-template-columns: 1fr;
   }

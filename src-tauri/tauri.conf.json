@@ -26,6 +26,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "AgentKitForge",
+    "shortDescription": "Desktop app for portable Agent Kits.",
+    "longDescription": "AgentKitForge is a desktop app for building, validating, packaging, installing, and using portable Agent Kits.",
+    "copyright": "Copyright (c) AgentKitForge",
     "icon": ["icons/icon.ico"],
     "resources": [
       "backend/validate-agent-kit.mjs",
