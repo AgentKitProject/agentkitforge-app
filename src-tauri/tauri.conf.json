@@ -30,7 +30,8 @@
     "resources": [
       "backend/validate-agent-kit.mjs",
       "backend/create-agent-kit.mjs",
-      "backend/export-agent-kit-onefile.mjs"
+      "backend/export-agent-kit-onefile.mjs",
+      "backend/render-agent-kit-draft.mjs"
     ]
   }
 }

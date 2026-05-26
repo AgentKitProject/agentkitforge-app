@@ -76,6 +76,18 @@ After creation, use **Validate created kit** to switch to validation with the de
 - `blank` uses `local-valid`
 - `financial-review` uses `trusted`
 
+## Render From Draft JSON
+
+Open the Build section and use **Render from Draft JSON** when you already have an `AgentKitDraft` JSON file:
+
+1. Select the draft `.json` file.
+2. Select the target output folder for the rendered Agent Kit.
+3. Enable force overwrite only when rendering into a non-empty folder is intentional.
+4. Click **Render**.
+5. Use **Validate rendered kit** to open the Validate section with the rendered folder selected.
+
+Draft JSON is the handoff format for the AI-assisted builder flow. Later, AgentKitForge will generate these drafts from natural-language requests; for now, you can render draft JSON produced by `agentkitforge-core` or checked into local examples.
+
 ## Export a One-File Markdown Bundle
 
 Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web assistant:

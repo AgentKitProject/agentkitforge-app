@@ -283,6 +283,11 @@ textarea {
   align-items: start;
 }
 
+.build-screen {
+  display: grid;
+  gap: 22px;
+}
+
 .build-side {
   display: grid;
   gap: 22px;

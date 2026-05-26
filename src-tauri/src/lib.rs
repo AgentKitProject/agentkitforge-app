@@ -77,6 +77,21 @@ struct ExportAgentKitOneFileResult {
     file_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderAgentKitDraftInput {
+    draft_file_path: String,
+    output_folder: String,
+    force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderAgentKitDraftResult {
+    root_path: String,
+    files: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ValidationIssue {
     severity: String,
@@ -110,6 +125,16 @@ fn select_onefile_output_path() -> Result<Option<String>, String> {
         .add_filter("Markdown", &["md"])
         .set_file_name("agent-kit.md")
         .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_json_file() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Select AgentKitDraft JSON")
+        .add_filter("JSON", &["json"])
+        .pick_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
 }
@@ -227,6 +252,40 @@ fn export_agent_kit_onefile<R: Runtime>(
 }
 
 #[tauri::command]
+fn render_agent_kit_draft<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: RenderAgentKitDraftInput,
+) -> Result<RenderAgentKitDraftResult, String> {
+    let draft_file_path = canonicalize_json_file(&input.draft_file_path)?;
+    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let bridge_script = resolve_render_draft_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&draft_file_path)
+        .arg(&output_folder)
+        .arg(if input.force { "true" } else { "false" })
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run agentkitforge-core draft render: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "agentkitforge-core draft render failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse draft render result: {error}"))
+}
+
+#[tauri::command]
 fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
@@ -280,6 +339,28 @@ fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn canonicalize_json_file(file_path: &str) -> Result<PathBuf, String> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err("Select an AgentKitDraft JSON file before rendering.".to_string());
+    }
+
+    let resolved = Path::new(trimmed)
+        .canonicalize()
+        .map_err(|error| format!("Unable to access selected draft file: {error}"))?;
+
+    if !resolved.is_file() {
+        return Err("Selected draft path is not a file.".to_string());
+    }
+
+    if resolved.extension().and_then(|value| value.to_str()) != Some("json") {
+        return Err("Selected draft file must be a .json file.".to_string());
+    }
+
+    Ok(resolved)
+}
+
+
 fn resolve_validation_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "validate-agent-kit.mjs")
 }
@@ -290,6 +371,10 @@ fn resolve_create_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
 
 fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "export-agent-kit-onefile.mjs")
+}
+
+fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "render-agent-kit-draft.mjs")
 }
 
 fn resolve_backend_script<R: Runtime>(
@@ -420,9 +505,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             select_agent_kit_folder,
             select_onefile_output_path,
+            select_json_file,
             validate_agent_kit,
             create_agent_kit_from_template,
             export_agent_kit_onefile,
+            render_agent_kit_draft,
             get_app_settings,
             save_openai_api_key,
             clear_openai_api_key,

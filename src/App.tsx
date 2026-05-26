@@ -46,6 +46,17 @@ type CreateAgentKitResult = {
   files: string[];
 };
 
+type RenderAgentKitDraftResult = {
+  rootPath: string;
+  files: string[];
+};
+
+type RenderAgentKitDraftInput = {
+  draftFilePath: string;
+  outputFolder: string;
+  force: boolean;
+};
+
 type CreateAgentKitInput = {
   outputFolder: string;
   id: string;
@@ -247,6 +258,19 @@ function BuildScreen({
   );
   const [isSelecting, setIsSelecting] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [draftForm, setDraftForm] = useState<RenderAgentKitDraftInput>({
+    draftFilePath: "",
+    outputFolder: "",
+    force: false,
+  });
+  const [draftResult, setDraftResult] = useState<RenderAgentKitDraftResult | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftFieldErrors, setDraftFieldErrors] = useState<
+    Partial<Record<keyof RenderAgentKitDraftInput, string>>
+  >({});
+  const [isSelectingDraftFile, setIsSelectingDraftFile] = useState(false);
+  const [isSelectingDraftOutput, setIsSelectingDraftOutput] = useState(false);
+  const [isRenderingDraft, setIsRenderingDraft] = useState(false);
 
   function updateForm<Key extends keyof CreateAgentKitInput>(
     key: Key,
@@ -274,6 +298,48 @@ function BuildScreen({
     }
   }
 
+  function updateDraftForm<Key extends keyof RenderAgentKitDraftInput>(
+    key: Key,
+    value: RenderAgentKitDraftInput[Key],
+  ) {
+    setDraftForm((current) => ({ ...current, [key]: value }));
+    setDraftResult(null);
+    setDraftError(null);
+    setDraftFieldErrors((current) => ({ ...current, [key]: undefined }));
+  }
+
+  async function selectDraftFile() {
+    setIsSelectingDraftFile(true);
+    setDraftError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_json_file");
+      if (selectedPath) {
+        updateDraftForm("draftFilePath", selectedPath);
+      }
+    } catch (caughtError) {
+      setDraftError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingDraftFile(false);
+    }
+  }
+
+  async function selectDraftOutputFolder() {
+    setIsSelectingDraftOutput(true);
+    setDraftError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateDraftForm("outputFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setDraftError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingDraftOutput(false);
+    }
+  }
+
   async function createKit() {
     const validationErrors = validateCreateForm(form);
     setFieldErrors(validationErrors);
@@ -298,11 +364,36 @@ function BuildScreen({
     }
   }
 
+  async function renderDraft() {
+    const validationErrors = validateDraftRenderForm(draftForm);
+    setDraftFieldErrors(validationErrors);
+    setDraftError(null);
+    setDraftResult(null);
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsRenderingDraft(true);
+
+    try {
+      const renderResult = await invoke<RenderAgentKitDraftResult>("render_agent_kit_draft", {
+        input: draftForm,
+      });
+      setDraftResult(renderResult);
+    } catch (caughtError) {
+      setDraftError(errorToMessage(caughtError));
+    } finally {
+      setIsRenderingDraft(false);
+    }
+  }
+
   const validationProfile = defaultValidationProfileForTemplate(result?.template ?? form.template);
 
   return (
-    <div className="build-layout">
-      <div className="form-panel">
+    <div className="build-screen">
+      <div className="build-layout">
+        <div className="form-panel">
         <h2>Create from template</h2>
 
         <label htmlFor="build-output-folder">Target output folder</label>
@@ -381,9 +472,8 @@ function BuildScreen({
           <Box size={18} />
           {isCreating ? "Creating" : "Create"}
         </button>
-      </div>
+        </div>
 
-      <div className="build-side">
         <div className="results-panel">
           <div className="panel-label">Create Result</div>
           <CreateAgentKitResults
@@ -394,19 +484,90 @@ function BuildScreen({
             validationProfile={validationProfile}
           />
         </div>
+      </div>
 
-        <div className="screen-grid compact">
-          <PlaceholderCard
-            description="Generate a draft request and build kit content with an OpenAI-assisted workflow."
-            icon={Sparkles}
-            title="Build with OpenAI"
-          />
-          <PlaceholderCard
-            description="Render a complete kit folder from draft JSON once core integration is wired."
-            icon={FileArchive}
-            title="Render from draft JSON"
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Render from Draft JSON</h2>
+
+          <label htmlFor="draft-json-file">Draft JSON file</label>
+          <div className="path-picker">
+            <input
+              id="draft-json-file"
+              onChange={(event) => updateDraftForm("draftFilePath", event.target.value)}
+              placeholder="C:\\kits\\drafts\\agent-kit-draft.json"
+              value={draftForm.draftFilePath}
+            />
+            <button
+              className="icon-button"
+              disabled={isSelectingDraftFile || isRenderingDraft}
+              onClick={selectDraftFile}
+              title="Select draft JSON"
+              type="button"
+            >
+              <FileArchive size={18} />
+            </button>
+          </div>
+          <FieldError message={draftFieldErrors.draftFilePath} />
+
+          <label htmlFor="draft-output-folder">Target output folder</label>
+          <div className="path-picker">
+            <input
+              id="draft-output-folder"
+              onChange={(event) => updateDraftForm("outputFolder", event.target.value)}
+              placeholder="C:\\kits\\rendered-agent-kit"
+              value={draftForm.outputFolder}
+            />
+            <button
+              className="icon-button"
+              disabled={isSelectingDraftOutput || isRenderingDraft}
+              onClick={selectDraftOutputFolder}
+              title="Select output folder"
+              type="button"
+            >
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={draftFieldErrors.outputFolder} />
+
+          <label className="checkbox-row" htmlFor="draft-force">
+            <input
+              checked={draftForm.force}
+              id="draft-force"
+              onChange={(event) => updateDraftForm("force", event.target.checked)}
+              type="checkbox"
+            />
+            <span>Force overwrite generated files</span>
+          </label>
+
+          <button
+            className="primary-button"
+            disabled={isRenderingDraft}
+            onClick={renderDraft}
+            type="button"
+          >
+            <FileArchive size={18} />
+            {isRenderingDraft ? "Rendering" : "Render"}
+          </button>
+        </div>
+
+        <div className="results-panel">
+          <div className="panel-label">Render Result</div>
+          <RenderAgentKitDraftResults
+            error={draftError}
+            isLoading={isRenderingDraft}
+            onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
+            result={draftResult}
           />
         </div>
+      </div>
+
+      <div className="screen-grid compact">
+        <PlaceholderCard
+          description="Generate a draft request and build kit content with an OpenAI-assisted workflow."
+          icon={Sparkles}
+          title="Build with OpenAI"
+        />
       </div>
     </div>
   );
@@ -1291,6 +1452,72 @@ function CreateAgentKitResults({
   );
 }
 
+function RenderAgentKitDraftResults({
+  error,
+  isLoading,
+  onValidateRenderedKit,
+  result,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  onValidateRenderedKit: (rootPath: string) => void;
+  result: RenderAgentKitDraftResult | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Rendering Agent Kit from draft JSON...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return <p className="state-copy">Render a draft JSON file to see the generated kit files.</p>;
+  }
+
+  return (
+    <div className="create-result">
+      <div className="status-banner valid">
+        <strong>Rendered</strong>
+        <span>{result.files.length} file{result.files.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Root path</dt>
+          <dd>{result.rootPath}</dd>
+        </div>
+        <div>
+          <dt>Validation profile</dt>
+          <dd>local-valid</dd>
+        </div>
+      </dl>
+
+      <div className="created-files">
+        <h3>Created files</h3>
+        <ul>
+          {result.files.map((file) => (
+            <li key={file}>{file}</li>
+          ))}
+        </ul>
+      </div>
+
+      <button
+        className="primary-button"
+        onClick={() => onValidateRenderedKit(result.rootPath)}
+        type="button"
+      >
+        <CheckCircle2 size={18} />
+        Validate rendered kit
+      </button>
+    </div>
+  );
+}
+
 function FieldError({ message }: { message?: string }) {
   if (!message) {
     return null;
@@ -1322,6 +1549,20 @@ function validateCreateForm(form: CreateAgentKitInput) {
 
   if (!agentKitTemplates.includes(form.template)) {
     errors.template = "Template is required.";
+  }
+
+  return errors;
+}
+
+function validateDraftRenderForm(form: RenderAgentKitDraftInput) {
+  const errors: Partial<Record<keyof RenderAgentKitDraftInput, string>> = {};
+
+  if (form.draftFilePath.trim() === "") {
+    errors.draftFilePath = "Draft JSON file is required.";
+  }
+
+  if (form.outputFolder.trim() === "") {
+    errors.outputFolder = "Output folder is required.";
   }
 
   return errors;
