@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    time::{SystemTime, UNIX_EPOCH},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -89,6 +90,64 @@ struct PackageAgentKitInput {
 struct PackageAgentKitResult {
     artifact_path: String,
     artifact_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum KitLibrarySource {
+    Built,
+    Imported,
+    Manual,
+    Unknown,
+}
+
+impl KitLibrarySource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Built => "built",
+            Self::Imported => "imported",
+            Self::Manual => "manual",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddKitToLibraryInput {
+    path: String,
+    source: KitLibrarySource,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MyKitEntry {
+    id: String,
+    name: String,
+    version: String,
+    description: Option<String>,
+    path: String,
+    source: String,
+    last_validated_at: Option<String>,
+    last_validated_profile: Option<String>,
+    last_validation_valid: Option<bool>,
+    last_used_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+    path_exists: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct MyKitsLibrary {
+    kits: Vec<MyKitEntry>,
+}
+
+struct KitMetadata {
+    id: String,
+    name: String,
+    version: String,
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -524,6 +583,131 @@ fn open_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn list_my_kits<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<MyKitEntry>, String> {
+    let mut library = read_my_kits_library(&app)?;
+    for kit in &mut library.kits {
+        kit.path_exists = Path::new(&kit.path).is_dir();
+    }
+    library
+        .kits
+        .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(library.kits)
+}
+
+#[tauri::command]
+fn add_kit_to_library<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: AddKitToLibraryInput,
+) -> Result<MyKitEntry, String> {
+    let path = canonicalize_directory(&input.path)?;
+    let metadata = read_kit_metadata(&path)?;
+    let now = now_timestamp();
+    let mut library = read_my_kits_library(&app)?;
+    let normalized_path = path.to_string_lossy().into_owned();
+
+    if let Some(existing) = library
+        .kits
+        .iter_mut()
+        .find(|kit| paths_equal(&kit.path, &normalized_path))
+    {
+        existing.id = metadata.id;
+        existing.name = metadata.name;
+        existing.version = metadata.version;
+        existing.description = metadata.description;
+        existing.source = input.source.as_str().to_string();
+        existing.updated_at = now;
+        existing.path_exists = true;
+        let entry = existing.clone();
+        write_my_kits_library(&app, &library)?;
+        return Ok(entry);
+    }
+
+    let entry = MyKitEntry {
+        id: metadata.id,
+        name: metadata.name,
+        version: metadata.version,
+        description: metadata.description,
+        path: normalized_path,
+        source: input.source.as_str().to_string(),
+        last_validated_at: None,
+        last_validated_profile: None,
+        last_validation_valid: None,
+        last_used_at: None,
+        created_at: now.clone(),
+        updated_at: now,
+        path_exists: true,
+    };
+    library.kits.push(entry.clone());
+    write_my_kits_library(&app, &library)?;
+    Ok(entry)
+}
+
+#[tauri::command]
+fn remove_kit_from_library<R: Runtime>(app: tauri::AppHandle<R>, path: String) -> Result<(), String> {
+    let mut library = read_my_kits_library(&app)?;
+    library.kits.retain(|kit| !paths_equal(&kit.path, &path));
+    write_my_kits_library(&app, &library)
+}
+
+#[tauri::command]
+fn refresh_kit_metadata<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<MyKitEntry, String> {
+    let resolved_path = canonicalize_directory(&path)?;
+    let metadata = read_kit_metadata(&resolved_path)?;
+    let normalized_path = resolved_path.to_string_lossy().into_owned();
+    let now = now_timestamp();
+    let mut library = read_my_kits_library(&app)?;
+    let entry = library
+        .kits
+        .iter_mut()
+        .find(|kit| paths_equal(&kit.path, &normalized_path))
+        .ok_or_else(|| "Kit is not in My Kits.".to_string())?;
+
+    entry.id = metadata.id;
+    entry.name = metadata.name;
+    entry.version = metadata.version;
+    entry.description = metadata.description;
+    entry.updated_at = now;
+    entry.path_exists = true;
+    let updated = entry.clone();
+    write_my_kits_library(&app, &library)?;
+    Ok(updated)
+}
+
+#[tauri::command]
+fn mark_library_kit_used<R: Runtime>(app: tauri::AppHandle<R>, path: String) -> Result<(), String> {
+    let mut library = read_my_kits_library(&app)?;
+    if let Some(entry) = library.kits.iter_mut().find(|kit| paths_equal(&kit.path, &path)) {
+        let now = now_timestamp();
+        entry.last_used_at = Some(now.clone());
+        entry.updated_at = now;
+        write_my_kits_library(&app, &library)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn validate_library_kit<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+    profile: ValidationProfile,
+) -> Result<ValidationReport, String> {
+    let report = validate_agent_kit(app.clone(), path.clone(), profile)?;
+    let mut library = read_my_kits_library(&app)?;
+    if let Some(entry) = library.kits.iter_mut().find(|kit| paths_equal(&kit.path, &path)) {
+        let now = now_timestamp();
+        entry.last_validated_at = Some(now.clone());
+        entry.last_validated_profile = Some(report.profile.clone());
+        entry.last_validation_valid = Some(report.valid);
+        entry.updated_at = now;
+        write_my_kits_library(&app, &library)?;
+    }
+    Ok(report)
+}
+
+#[tauri::command]
 fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
@@ -844,6 +1028,108 @@ fn default_artifact_stem(root_path: &Path) -> String {
         .to_string()
 }
 
+fn read_my_kits_library<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<MyKitsLibrary, String> {
+    let path = my_kits_library_path(app)?;
+    if !path.exists() {
+        return Ok(MyKitsLibrary::default());
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Unable to read My Kits library: {error}"))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("Unable to parse My Kits library: {error}"))
+}
+
+fn write_my_kits_library<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    library: &MyKitsLibrary,
+) -> Result<(), String> {
+    let path = my_kits_library_path(app)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Unable to resolve My Kits library folder.".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create My Kits library folder: {error}"))?;
+    let content = serde_json::to_string_pretty(library)
+        .map_err(|error| format!("Unable to serialize My Kits library: {error}"))?;
+    fs::write(path, content).map_err(|error| format!("Unable to save My Kits library: {error}"))
+}
+
+fn my_kits_library_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_local_data_dir()
+        .map(|path| path.join("my-kits.json"))
+        .map_err(|error| format!("Unable to resolve My Kits library folder: {error}"))
+}
+
+fn read_kit_metadata(root_path: &Path) -> Result<KitMetadata, String> {
+    let manifest_path = root_path.join("agentkit.yaml");
+    if !manifest_path.exists() {
+        return Err("agentkit.yaml is required to add a kit to My Kits.".to_string());
+    }
+
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("Unable to read agentkit.yaml: {error}"))?;
+    let id = read_manifest_scalar(&manifest, "id")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_artifact_stem(root_path));
+    let name = read_manifest_scalar(&manifest, "name")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| id.clone());
+    let version = read_manifest_scalar(&manifest, "version")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    let description = read_manifest_scalar(&manifest, "description")
+        .filter(|value| !value.trim().is_empty());
+
+    Ok(KitMetadata {
+        id,
+        name,
+        version,
+        description,
+    })
+}
+
+fn read_manifest_scalar(manifest: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    manifest.lines().find_map(|line| {
+        if line.starts_with(' ') || !line.trim_start().starts_with(&prefix) {
+            return None;
+        }
+
+        let value = line.split_once(':')?.1.trim();
+        Some(unquote_yaml_scalar(value))
+    })
+}
+
+fn unquote_yaml_scalar(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        trimmed[1..trimmed.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn paths_equal(left: &str, right: &str) -> bool {
+    match (Path::new(left).canonicalize(), Path::new(right).canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left.eq_ignore_ascii_case(right),
+    }
+}
+
+fn now_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -865,7 +1151,13 @@ pub fn run() {
             clear_openai_api_key,
             save_default_model,
             run_agent_kit_with_openai,
-            open_folder
+            open_folder,
+            add_kit_to_library,
+            list_my_kits,
+            remove_kit_from_library,
+            refresh_kit_metadata,
+            validate_library_kit,
+            mark_library_kit_used
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

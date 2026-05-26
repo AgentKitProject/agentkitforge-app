@@ -163,7 +163,18 @@ For v0.1, Forge includes `AGENTKIT.md`, every `skills/*/SKILL.md` file, and supp
 - Build
 - Use
 - Validate
+- Package / Export
 - Settings
+
+## My Kits Library
+
+My Kits is a local-only library of Agent Kit folders on this machine. It stores metadata and paths so you can quickly reopen, validate, use, or package kits without moving or copying the kit folders.
+
+Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. Removing a kit from My Kits only removes the local library entry; it does not delete files from disk.
+
+The library is stored in Tauri app-local data as `my-kits.json`. On Windows this is typically under the user's local app data folder for AgentKitForge, alongside `settings.json`. The exact path is resolved by Tauri at runtime.
+
+If a kit folder no longer exists, My Kits shows a warning and disables actions that need the folder.
 
 ## Requirements
 

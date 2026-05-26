@@ -99,6 +99,24 @@ type ArtifactResult = {
   artifactType: ".agentkit.zip" | ".onefile.md";
 };
 
+type KitLibrarySource = "built" | "imported" | "manual" | "unknown";
+
+type MyKitEntry = {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  path: string;
+  source: KitLibrarySource;
+  lastValidatedAt?: string;
+  lastValidatedProfile?: ValidationProfile;
+  lastValidationValid?: boolean;
+  lastUsedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  pathExists: boolean;
+};
+
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
@@ -162,6 +180,14 @@ export function App() {
     setAppState((current) => ({ ...current, [key]: value }));
   }
 
+  async function addKitToLibrary(path: string, source: KitLibrarySource) {
+    try {
+      await invoke<MyKitEntry>("add_kit_to_library", { input: { path, source } });
+    } catch {
+      // Library add failures should not block create/render/package flows.
+    }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -216,9 +242,26 @@ export function App() {
         </header>
 
         <section className="content">
-          {activeSection === "my-kits" && <MyKitsScreen />}
+          {activeSection === "my-kits" && (
+            <MyKitsScreen
+              onPackageKit={(path) => {
+                updateAppState("currentKitPath", path);
+                setActiveSection("package-export");
+              }}
+              onUseKit={(path) => {
+                updateAppState("currentKitPath", path);
+                invoke("mark_library_kit_used", { path }).catch(() => undefined);
+                setActiveSection("use");
+              }}
+              onValidateKit={(path) => {
+                updateAppState("currentKitPath", path);
+                setActiveSection("validate");
+              }}
+            />
+          )}
           {activeSection === "build" && (
             <BuildScreen
+              onKitReady={(rootPath) => addKitToLibrary(rootPath, "built")}
               settings={settings}
               onValidateCreatedKit={(rootPath, profile) => {
                 updateAppState("currentKitPath", rootPath);
@@ -238,7 +281,12 @@ export function App() {
               onProfileChange={(value) => updateAppState("preferredValidationProfile", value)}
             />
           )}
-          {activeSection === "package-export" && <PackageExportScreen currentKitPath={appState.currentKitPath} />}
+          {activeSection === "package-export" && (
+            <PackageExportScreen
+              currentKitPath={appState.currentKitPath}
+              onKitPackaged={(path) => addKitToLibrary(path, "manual")}
+            />
+          )}
           {activeSection === "settings" && (
             <SettingsScreen
               appState={appState}
@@ -253,27 +301,205 @@ export function App() {
   );
 }
 
-function MyKitsScreen() {
+function MyKitsScreen({
+  onPackageKit,
+  onUseKit,
+  onValidateKit,
+}: {
+  onPackageKit: (path: string) => void;
+  onUseKit: (path: string) => void;
+  onValidateKit: (path: string) => void;
+}) {
+  const [kits, setKits] = useState<MyKitEntry[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isAdding, setIsAdding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadKits();
+  }, []);
+
+  async function loadKits() {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      setKits(await invoke<MyKitEntry[]>("list_my_kits"));
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function addExistingKit() {
+    setIsAdding(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        await invoke<MyKitEntry>("add_kit_to_library", {
+          input: { path: selectedPath, source: "manual" },
+        });
+        await loadKits();
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsAdding(false);
+    }
+  }
+
+  async function removeKit(path: string) {
+    setError(null);
+    try {
+      await invoke("remove_kit_from_library", { path });
+      await loadKits();
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function refreshKit(path: string) {
+    setError(null);
+    try {
+      await invoke<MyKitEntry>("refresh_kit_metadata", { path });
+      await loadKits();
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function validateKit(path: string) {
+    setError(null);
+    try {
+      await invoke<ValidationReport>("validate_library_kit", { path, profile: "local-valid" });
+      await loadKits();
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function openKitFolder(path: string) {
+    setError(null);
+    try {
+      await invoke("open_folder", { path });
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="empty-state">
+        <PackageOpen size={42} strokeWidth={1.8} />
+        <h2>Loading kits</h2>
+      </div>
+    );
+  }
+
+  if (kits.length === 0) {
+    return (
+      <div className="empty-state">
+        <PackageOpen size={42} strokeWidth={1.8} />
+        <h2>No kits added yet</h2>
+        <p>Add existing Agent Kit folders or build a new kit. Local library entries do not move or copy files.</p>
+        {error && (
+          <div className="error-state" role="alert">
+            {error}
+          </div>
+        )}
+        <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
+          <FolderOpen size={18} />
+          {isAdding ? "Adding" : "Add existing kit folder"}
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="empty-state">
-      <PackageOpen size={42} strokeWidth={1.8} />
-      <h2>No kits added yet</h2>
-      <p>
-        Recent and pinned Agent Kits will appear here once local kit discovery and import flows are
-        connected.
-      </p>
-      <button className="primary-button" type="button">
-        <FolderOpen size={18} />
-        Select kit folder
-      </button>
+    <div className="my-kits-screen">
+      <div className="screen-toolbar">
+        <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
+          <FolderOpen size={18} />
+          {isAdding ? "Adding" : "Add existing kit folder"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div className="kit-list">
+        {kits.map((kit) => (
+          <article className={`kit-library-card ${kit.pathExists ? "" : "missing"}`} key={kit.path}>
+            <div className="kit-library-main">
+              <div>
+                <h2>{kit.name}</h2>
+                <p>{kit.description || "No description available."}</p>
+              </div>
+              <span className="source-badge">{kit.source}</span>
+            </div>
+
+            {!kit.pathExists && (
+              <div className="inline-warning">This folder no longer exists on disk.</div>
+            )}
+
+            <dl className="kit-meta-grid">
+              <div>
+                <dt>Version</dt>
+                <dd>{kit.version}</dd>
+              </div>
+              <div>
+                <dt>Path</dt>
+                <dd>{kit.path}</dd>
+              </div>
+              <div>
+                <dt>Validation</dt>
+                <dd>{formatValidationState(kit)}</dd>
+              </div>
+              <div>
+                <dt>Last used</dt>
+                <dd>{formatTimestamp(kit.lastUsedAt)}</dd>
+              </div>
+            </dl>
+
+            <div className="button-row">
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onUseKit(kit.path)} type="button">
+                Use kit
+              </button>
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onValidateKit(kit.path)} type="button">
+                Validate
+              </button>
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onPackageKit(kit.path)} type="button">
+                Package/export
+              </button>
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => openKitFolder(kit.path)} type="button">
+                Open folder
+              </button>
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => refreshKit(kit.path)} type="button">
+                Refresh
+              </button>
+              <button className="secondary-button compact-button" onClick={() => removeKit(kit.path)} type="button">
+                Remove
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
 
 function BuildScreen({
+  onKitReady,
   onValidateCreatedKit,
   settings,
 }: {
+  onKitReady: (rootPath: string) => void;
   onValidateCreatedKit: (rootPath: string, profile: ValidationProfile) => void;
   settings: PublicSettings;
 }) {
@@ -433,6 +659,7 @@ function BuildScreen({
         input: form,
       });
       setResult(createResult);
+      onKitReady(createResult.rootPath);
     } catch (caughtError) {
       setError(errorToMessage(caughtError));
     } finally {
@@ -457,6 +684,7 @@ function BuildScreen({
         input: draftForm,
       });
       setDraftResult(renderResult);
+      onKitReady(renderResult.rootPath);
     } catch (caughtError) {
       setDraftError(errorToMessage(caughtError));
     } finally {
@@ -569,6 +797,7 @@ function BuildScreen({
         },
       });
       setGeneratedRenderResult(result);
+      onKitReady(result.rootPath);
     } catch (caughtError) {
       setGeneratedRenderError(errorToMessage(caughtError));
     } finally {
@@ -1345,7 +1574,13 @@ function UseScreen({
   );
 }
 
-function PackageExportScreen({ currentKitPath }: { currentKitPath: string }) {
+function PackageExportScreen({
+  currentKitPath,
+  onKitPackaged,
+}: {
+  currentKitPath: string;
+  onKitPackaged: (path: string) => void;
+}) {
   const [kitPath, setKitPath] = useState(currentKitPath);
   const [outputFolder, setOutputFolder] = useState("");
   const [validationProfile, setValidationProfile] = useState<ValidationProfile>("local-valid");
@@ -1435,6 +1670,7 @@ function PackageExportScreen({ currentKitPath }: { currentKitPath: string }) {
       const result = await invoke<PackageAgentKitResult>("package_agent_kit", {
         input: { rootPath: kitPath, outputFolder },
       });
+      onKitPackaged(kitPath);
       setArtifacts((current) => [
         { artifactPath: result.artifactPath, artifactType: ".agentkit.zip" },
         ...current,
@@ -1835,6 +2071,27 @@ function validatePackageExportForm(kitPath: string, outputFolder: string) {
   }
 
   return errors;
+}
+
+function formatValidationState(kit: MyKitEntry) {
+  if (kit.lastValidationValid === undefined || kit.lastValidationValid === null) {
+    return "Not validated";
+  }
+
+  return `${kit.lastValidationValid ? "Valid" : "Invalid"} (${kit.lastValidatedProfile ?? "unknown"})`;
+}
+
+function formatTimestamp(value?: string) {
+  if (!value) {
+    return "Never";
+  }
+
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return value;
+  }
+
+  return new Date(numeric * 1000).toLocaleString();
 }
 
 function validateRunForm(settings: PublicSettings, kitPath: string, userTask: string) {
