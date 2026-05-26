@@ -17,6 +17,7 @@ import { useMemo, useState } from "react";
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
+type AgentKitTemplate = "blank" | "financial-review";
 
 type AppState = {
   currentKitPath: string;
@@ -39,6 +40,21 @@ type ValidationReport = {
   issues: ValidationIssue[];
 };
 
+type CreateAgentKitResult = {
+  rootPath: string;
+  template: AgentKitTemplate;
+  files: string[];
+};
+
+type CreateAgentKitInput = {
+  outputFolder: string;
+  id: string;
+  name: string;
+  description: string;
+  template: AgentKitTemplate;
+  force: boolean;
+};
+
 type NavItem = {
   id: SectionId;
   label: string;
@@ -46,6 +62,7 @@ type NavItem = {
 };
 
 const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "trusted", "verified"];
+const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -128,7 +145,15 @@ export function App() {
 
         <section className="content">
           {activeSection === "my-kits" && <MyKitsScreen />}
-          {activeSection === "build" && <BuildScreen />}
+          {activeSection === "build" && (
+            <BuildScreen
+              onValidateCreatedKit={(rootPath, profile) => {
+                updateAppState("currentKitPath", rootPath);
+                updateAppState("preferredValidationProfile", profile);
+                setActiveSection("validate");
+              }}
+            />
+          )}
           {activeSection === "use" && <UseScreen currentKitPath={appState.currentKitPath} />}
           {activeSection === "validate" && (
             <ValidateScreen
@@ -164,24 +189,187 @@ function MyKitsScreen() {
   );
 }
 
-function BuildScreen() {
+function BuildScreen({
+  onValidateCreatedKit,
+}: {
+  onValidateCreatedKit: (rootPath: string, profile: ValidationProfile) => void;
+}) {
+  const [form, setForm] = useState<CreateAgentKitInput>({
+    outputFolder: "",
+    id: "",
+    name: "",
+    description: "",
+    template: "blank",
+    force: false,
+  });
+  const [result, setResult] = useState<CreateAgentKitResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof CreateAgentKitInput, string>>>(
+    {},
+  );
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+
+  function updateForm<Key extends keyof CreateAgentKitInput>(
+    key: Key,
+    value: CreateAgentKitInput[Key],
+  ) {
+    setForm((current) => ({ ...current, [key]: value }));
+    setResult(null);
+    setError(null);
+    setFieldErrors((current) => ({ ...current, [key]: undefined }));
+  }
+
+  async function selectOutputFolder() {
+    setIsSelecting(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateForm("outputFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelecting(false);
+    }
+  }
+
+  async function createKit() {
+    const validationErrors = validateCreateForm(form);
+    setFieldErrors(validationErrors);
+    setError(null);
+    setResult(null);
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsCreating(true);
+
+    try {
+      const createResult = await invoke<CreateAgentKitResult>("create_agent_kit_from_template", {
+        input: form,
+      });
+      setResult(createResult);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsCreating(false);
+    }
+  }
+
+  const validationProfile = defaultValidationProfileForTemplate(result?.template ?? form.template);
+
   return (
-    <div className="screen-grid">
-      <PlaceholderCard
-        description="Start a new portable Agent Kit from a guided starter structure."
-        icon={Box}
-        title="Create from template"
-      />
-      <PlaceholderCard
-        description="Generate a draft request and build kit content with an OpenAI-assisted workflow."
-        icon={Sparkles}
-        title="Build with OpenAI"
-      />
-      <PlaceholderCard
-        description="Render a complete kit folder from draft JSON once core integration is wired."
-        icon={FileArchive}
-        title="Render from draft JSON"
-      />
+    <div className="build-layout">
+      <div className="form-panel">
+        <h2>Create from template</h2>
+
+        <label htmlFor="build-output-folder">Target output folder</label>
+        <div className="path-picker">
+          <input
+            id="build-output-folder"
+            onChange={(event) => updateForm("outputFolder", event.target.value)}
+            placeholder="C:\\kits"
+            value={form.outputFolder}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelecting || isCreating}
+            onClick={selectOutputFolder}
+            title="Select output folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.outputFolder} />
+
+        <label htmlFor="build-kit-id">Kit id</label>
+        <input
+          id="build-kit-id"
+          onChange={(event) => updateForm("id", event.target.value)}
+          placeholder="customer-support"
+          value={form.id}
+        />
+        <FieldError message={fieldErrors.id} />
+
+        <label htmlFor="build-kit-name">Kit name</label>
+        <input
+          id="build-kit-name"
+          onChange={(event) => updateForm("name", event.target.value)}
+          placeholder="Customer Support"
+          value={form.name}
+        />
+        <FieldError message={fieldErrors.name} />
+
+        <label htmlFor="build-kit-description">Kit description</label>
+        <textarea
+          id="build-kit-description"
+          onChange={(event) => updateForm("description", event.target.value)}
+          placeholder="A kit for handling customer support workflows."
+          rows={4}
+          value={form.description}
+        />
+        <FieldError message={fieldErrors.description} />
+
+        <label htmlFor="build-template">Template</label>
+        <select
+          id="build-template"
+          onChange={(event) => updateForm("template", event.target.value as AgentKitTemplate)}
+          value={form.template}
+        >
+          {agentKitTemplates.map((template) => (
+            <option key={template} value={template}>
+              {template}
+            </option>
+          ))}
+        </select>
+        <FieldError message={fieldErrors.template} />
+
+        <label className="checkbox-row" htmlFor="build-force">
+          <input
+            checked={form.force}
+            id="build-force"
+            onChange={(event) => updateForm("force", event.target.checked)}
+            type="checkbox"
+          />
+          <span>Force overwrite template files</span>
+        </label>
+
+        <button className="primary-button" disabled={isCreating} onClick={createKit} type="button">
+          <Box size={18} />
+          {isCreating ? "Creating" : "Create"}
+        </button>
+      </div>
+
+      <div className="build-side">
+        <div className="results-panel">
+          <div className="panel-label">Create Result</div>
+          <CreateAgentKitResults
+            error={error}
+            isLoading={isCreating}
+            onValidateCreatedKit={(rootPath) => onValidateCreatedKit(rootPath, validationProfile)}
+            result={result}
+            validationProfile={validationProfile}
+          />
+        </div>
+
+        <div className="screen-grid compact">
+          <PlaceholderCard
+            description="Generate a draft request and build kit content with an OpenAI-assisted workflow."
+            icon={Sparkles}
+            title="Build with OpenAI"
+          />
+          <PlaceholderCard
+            description="Render a complete kit folder from draft JSON once core integration is wired."
+            icon={FileArchive}
+            title="Render from draft JSON"
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -373,6 +561,118 @@ function SettingsScreen({
       </select>
     </div>
   );
+}
+
+function CreateAgentKitResults({
+  error,
+  isLoading,
+  onValidateCreatedKit,
+  result,
+  validationProfile,
+}: {
+  error: string | null;
+  isLoading: boolean;
+  onValidateCreatedKit: (rootPath: string) => void;
+  result: CreateAgentKitResult | null;
+  validationProfile: ValidationProfile;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Creating kit from template...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return <p className="state-copy">Create a kit to see the generated files and root path.</p>;
+  }
+
+  return (
+    <div className="create-result">
+      <div className="status-banner valid">
+        <strong>Created</strong>
+        <span>{result.files.length} file{result.files.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Root path</dt>
+          <dd>{result.rootPath}</dd>
+        </div>
+        <div>
+          <dt>Template</dt>
+          <dd>{result.template}</dd>
+        </div>
+        <div>
+          <dt>Validation profile</dt>
+          <dd>{validationProfile}</dd>
+        </div>
+      </dl>
+
+      <div className="created-files">
+        <h3>Created files</h3>
+        <ul>
+          {result.files.map((file) => (
+            <li key={file}>{file}</li>
+          ))}
+        </ul>
+      </div>
+
+      <button
+        className="primary-button"
+        onClick={() => onValidateCreatedKit(result.rootPath)}
+        type="button"
+      >
+        <CheckCircle2 size={18} />
+        Validate created kit
+      </button>
+    </div>
+  );
+}
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) {
+    return null;
+  }
+
+  return <div className="field-error">{message}</div>;
+}
+
+function validateCreateForm(form: CreateAgentKitInput) {
+  const errors: Partial<Record<keyof CreateAgentKitInput, string>> = {};
+
+  if (form.outputFolder.trim() === "") {
+    errors.outputFolder = "Output folder is required.";
+  }
+
+  if (form.id.trim() === "") {
+    errors.id = "Kit id is required.";
+  } else if (!/^[A-Za-z0-9_-]+$/.test(form.id.trim())) {
+    errors.id = "Use letters, numbers, dashes, and underscores only.";
+  }
+
+  if (form.name.trim() === "") {
+    errors.name = "Kit name is required.";
+  }
+
+  if (form.description.trim() === "") {
+    errors.description = "Kit description is required.";
+  }
+
+  if (!agentKitTemplates.includes(form.template)) {
+    errors.template = "Template is required.";
+  }
+
+  return errors;
+}
+
+function defaultValidationProfileForTemplate(template: AgentKitTemplate): ValidationProfile {
+  return template === "financial-review" ? "trusted" : "local-valid";
 }
 
 function ValidationResults({

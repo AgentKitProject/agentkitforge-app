@@ -27,6 +27,6 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.ico"],
-    "resources": ["backend/validate-agent-kit.mjs"]
+    "resources": ["backend/validate-agent-kit.mjs", "backend/create-agent-kit.mjs"]
   }
 }

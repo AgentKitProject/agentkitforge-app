@@ -2,7 +2,7 @@
 
 AgentKitForge is a desktop app for building, validating, packaging, installing, and using portable Agent Kits.
 
-This first pass creates the Tauri, React, and TypeScript shell only. Core integration, marketplace features, paid account flows, and infrastructure are intentionally out of scope.
+The app currently integrates with `agentkitforge-core` for local template creation and validation. Marketplace features, paid account flows, and infrastructure are intentionally out of scope.
 
 ## Local Development
 
@@ -56,6 +56,25 @@ Create a packaged Tauri desktop build:
 ```sh
 npm run build:tauri
 ```
+
+## Create a Kit From a Template
+
+Open the Build section and fill in:
+
+- Target output folder
+- Kit id
+- Kit name
+- Kit description
+- Template: `blank` or `financial-review`
+
+The app creates the kit in a child folder named after the kit id. For example, output folder `C:\kits` and kit id `customer-support` creates `C:\kits\customer-support`.
+
+Use force overwrite only when you want template files to be written into an existing non-empty kit folder. Existing unrelated files are left in place by `agentkitforge-core`.
+
+After creation, use **Validate created kit** to switch to validation with the default profile for the template:
+
+- `blank` uses `local-valid`
+- `financial-review` uses `trusted`
 
 ## App Sections
 

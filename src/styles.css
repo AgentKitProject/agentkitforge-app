@@ -21,7 +21,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -170,7 +171,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 42px;
   padding: 0 12px;
@@ -182,9 +184,17 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #2f6fed;
   box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.14);
+}
+
+textarea {
+  min-height: 96px;
+  padding-top: 10px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 .content {
@@ -266,6 +276,18 @@ select:focus {
   grid-template-columns: repeat(3, minmax(220px, 1fr));
 }
 
+.build-layout {
+  display: grid;
+  grid-template-columns: minmax(340px, 440px) minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.build-side {
+  display: grid;
+  gap: 22px;
+}
+
 .placeholder-card,
 .form-panel,
 .results-panel {
@@ -301,6 +323,13 @@ select:focus {
   display: grid;
   gap: 10px;
   padding: 22px;
+}
+
+.form-panel h2 {
+  margin: 0 0 8px;
+  color: #162033;
+  font-size: 1.12rem;
+  letter-spacing: 0;
 }
 
 .settings-panel {
@@ -348,6 +377,32 @@ select:focus {
   border: 1px solid #f2c7c8;
   border-radius: 8px;
   line-height: 1.45;
+}
+
+.field-error {
+  margin-top: -4px;
+  color: #9b2428;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.checkbox-row input {
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+}
+
+.create-result {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
 }
 
 .validation-report {
@@ -413,6 +468,7 @@ select:focus {
   gap: 16px;
 }
 
+.created-files h3,
 .issue-group h3 {
   display: flex;
   align-items: center;
@@ -420,6 +476,23 @@ select:focus {
   margin: 0 0 8px;
   color: #253047;
   font-size: 0.95rem;
+}
+
+.created-files ul {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  color: #354155;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+  list-style-position: inside;
+}
+
+.issue-group h3 {
   text-transform: capitalize;
 }
 
@@ -516,7 +589,8 @@ select:focus {
   }
 
   .screen-grid,
-  .screen-grid.compact {
+  .screen-grid.compact,
+  .build-layout {
     grid-template-columns: 1fr;
   }
 }

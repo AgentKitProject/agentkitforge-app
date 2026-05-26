@@ -25,6 +25,41 @@ impl ValidationProfile {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum AgentKitTemplate {
+    Blank,
+    FinancialReview,
+}
+
+impl AgentKitTemplate {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Blank => "blank",
+            Self::FinancialReview => "financial-review",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAgentKitFromTemplateInput {
+    output_folder: String,
+    id: String,
+    name: String,
+    description: String,
+    template: AgentKitTemplate,
+    force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAgentKitResult {
+    root_path: String,
+    template: String,
+    files: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ValidationIssue {
     severity: String,
@@ -84,6 +119,52 @@ fn validate_agent_kit<R: Runtime>(
         .map_err(|error| format!("Unable to parse validation report: {error}"))
 }
 
+#[tauri::command]
+fn create_agent_kit_from_template<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: CreateAgentKitFromTemplateInput,
+) -> Result<CreateAgentKitResult, String> {
+    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let id = clean_required_value("Kit id", &input.id)?;
+    let name = clean_required_value("Kit name", &input.name)?;
+    let description = clean_required_value("Kit description", &input.description)?;
+    validate_kit_id(&id)?;
+
+    let target_path = output_folder.join(&id);
+    if !target_path.starts_with(&output_folder) {
+        return Err("Kit id must stay inside the selected output folder.".to_string());
+    }
+
+    let bridge_script = resolve_create_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&target_path)
+        .arg(input.template.as_str())
+        .arg(&id)
+        .arg(&name)
+        .arg(&description)
+        .arg(if input.force { "true" } else { "false" })
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run agentkitforge-core scaffolding: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "agentkitforge-core scaffolding failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse create result: {error}"))
+}
+
 fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
     let trimmed = root_path.trim();
     if trimmed.is_empty() {
@@ -102,17 +183,30 @@ fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
 }
 
 fn resolve_validation_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("backend/validate-agent-kit.mjs");
+    resolve_backend_script(app, "validate-agent-kit.mjs")
+}
+
+fn resolve_create_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "create-agent-kit.mjs")
+}
+
+fn resolve_backend_script<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    script_name: &str,
+) -> Result<PathBuf, String> {
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("backend")
+        .join(script_name);
     if dev_path.exists() {
         return Ok(dev_path);
     }
 
     app.path()
         .resolve(
-            "backend/validate-agent-kit.mjs",
+            format!("backend/{script_name}"),
             tauri::path::BaseDirectory::Resource,
         )
-        .map_err(|error| format!("Unable to locate validation bridge: {error}"))
+        .map_err(|error| format!("Unable to locate backend bridge: {error}"))
 }
 
 fn resolve_node_command() -> Result<String, String> {
@@ -137,12 +231,41 @@ fn resolve_command_working_directory<R: Runtime>(app: &tauri::AppHandle<R>) -> P
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+fn clean_required_value(label: &str, value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} is required."));
+    }
+
+    Ok(trimmed.to_string())
+}
+
+fn validate_kit_id(id: &str) -> Result<(), String> {
+    if id.contains('/') || id.contains('\\') || id == "." || id == ".." || id.contains("..") {
+        return Err(
+            "Kit id can contain letters, numbers, dashes, and underscores only.".to_string(),
+        );
+    }
+
+    if !id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+    {
+        return Err(
+            "Kit id can contain letters, numbers, dashes, and underscores only.".to_string(),
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             select_agent_kit_folder,
-            validate_agent_kit
+            validate_agent_kit,
+            create_agent_kit_from_template
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
