@@ -163,6 +163,23 @@ struct ImportAgentKitPackageResult {
     files: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAgentKitToCodexInput {
+    kit_path: String,
+    destination_skills_dir: String,
+    force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAgentKitToCodexResult {
+    destination_skills_dir: String,
+    exported_skill_folders: Vec<String>,
+    generated_index_folder: Option<String>,
+    warnings: Vec<String>,
+}
+
 struct KitMetadata {
     id: String,
     name: String,
@@ -771,6 +788,40 @@ fn import_agent_kit_package<R: Runtime>(
 }
 
 #[tauri::command]
+fn export_agent_kit_to_codex<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ExportAgentKitToCodexInput,
+) -> Result<ExportAgentKitToCodexResult, String> {
+    let kit_path = canonicalize_directory(&input.kit_path)?;
+    let destination_skills_dir = canonicalize_directory(&input.destination_skills_dir)?;
+    let bridge_script = resolve_codex_export_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&kit_path)
+        .arg(&destination_skills_dir)
+        .arg(if input.force { "true" } else { "false" })
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run Codex skills export: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "Codex skills export failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse Codex export result: {error}"))
+}
+
+#[tauri::command]
 fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
@@ -905,6 +956,10 @@ fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
 
 fn resolve_package_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "package-agent-kit.mjs")
+}
+
+fn resolve_codex_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "export-agent-kit-codex.mjs")
 }
 
 fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -1491,7 +1546,8 @@ pub fn run() {
             refresh_kit_metadata,
             validate_library_kit,
             mark_library_kit_used,
-            import_agent_kit_package
+            import_agent_kit_package,
+            export_agent_kit_to_codex
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

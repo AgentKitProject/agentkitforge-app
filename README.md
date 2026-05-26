@@ -166,7 +166,7 @@ Context modes:
 - `all`: include all declared skills.
 - `triggered`: include skills whose triggers match the task. If no skill matches, the builder falls back to all skills and shows a warning.
 
-Context target defaults to `openai`. The target labels are reserved for future adapter-specific formatting; install targets are not implemented yet.
+Context target defaults to `openai`. The target labels are reserved for future adapter-specific formatting.
 
 Include options:
 
@@ -184,7 +184,23 @@ After a run, expand **Context details** to see included files, included skills, 
 - Use
 - Validate
 - Package / Export
+- Install Targets
 - Settings
+
+## Install Targets
+
+Use **Install Targets** to export an Agent Kit into tool-specific local formats.
+
+The first supported target is Codex skills:
+
+1. Select an Agent Kit folder.
+2. Select the Codex skills destination folder.
+3. Enable force overwrite only when replacing AgentKitForge-generated export folders is intentional.
+4. Click **Export/Install to Codex**.
+
+AgentKitForge exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can discover them in future sessions. Users choose the destination skills folder; AgentKitForge does not infer or manage it automatically.
+
+AgentKitForge writes files only. It does not launch Codex, restart Codex, or verify that the Codex runtime loaded the exported skills.
 
 ## My Kits Library
 

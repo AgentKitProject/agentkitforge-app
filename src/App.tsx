@@ -5,6 +5,7 @@ import {
   FolderOutput,
   FolderOpen,
   Hammer,
+  Plug,
   KeyRound,
   PackageOpen,
   PlayCircle,
@@ -16,7 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
-type ExtendedSectionId = SectionId | "package-export";
+type ExtendedSectionId = SectionId | "package-export" | "install-targets";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
@@ -124,6 +125,13 @@ type ImportAgentKitPackageResult = {
   files: string[];
 };
 
+type CodexExportResult = {
+  destinationSkillsDir: string;
+  exportedSkillFolders: string[];
+  generatedIndexFolder?: string;
+  warnings: string[];
+};
+
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
@@ -165,6 +173,7 @@ const navItems: NavItem[] = [
   { id: "use", label: "Use", icon: PlayCircle },
   { id: "validate", label: "Validate", icon: CheckCircle2 },
   { id: "package-export" as ExtendedSectionId, label: "Package / Export", icon: FolderOutput },
+  { id: "install-targets", label: "Install Targets", icon: Plug },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -306,6 +315,9 @@ export function App() {
               currentKitPath={appState.currentKitPath}
               onKitPackaged={(path) => addKitToLibrary(path, "manual")}
             />
+          )}
+          {activeSection === "install-targets" && (
+            <InstallTargetsScreen currentKitPath={appState.currentKitPath} />
           )}
           {activeSection === "settings" && (
             <SettingsScreen
@@ -2238,6 +2250,256 @@ function PackageExportScreen({
   );
 }
 
+function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
+  const [kitPath, setKitPath] = useState(currentKitPath);
+  const [destinationSkillsDir, setDestinationSkillsDir] = useState("");
+  const [force, setForce] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; destinationSkillsDir?: string }>({});
+  const [result, setResult] = useState<CodexExportResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isSelectingKit, setIsSelectingKit] = useState(false);
+  const [isSelectingDestination, setIsSelectingDestination] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    setKitPath(currentKitPath);
+  }, [currentKitPath]);
+
+  async function selectKitFolder() {
+    setIsSelectingKit(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setKitPath(selectedPath);
+        setResult(null);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingKit(false);
+    }
+  }
+
+  async function selectDestinationFolder() {
+    setIsSelectingDestination(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setDestinationSkillsDir(selectedPath);
+        setResult(null);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingDestination(false);
+    }
+  }
+
+  async function exportToCodex() {
+    const validationErrors = validateCodexExportForm(kitPath, destinationSkillsDir);
+    setFieldErrors(validationErrors);
+    setError(null);
+    setResult(null);
+    setCopyState("idle");
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsExporting(true);
+
+    try {
+      const exportResult = await invoke<CodexExportResult>("export_agent_kit_to_codex", {
+        input: { kitPath, destinationSkillsDir, force },
+      });
+      setResult(exportResult);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  async function openDestinationFolder() {
+    try {
+      await invoke("open_folder", { path: result?.destinationSkillsDir ?? destinationSkillsDir });
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function copyDestinationPath() {
+    const path = result?.destinationSkillsDir ?? destinationSkillsDir;
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+
+  return (
+    <div className="build-layout">
+      <div className="form-panel">
+        <h2>Export to Codex</h2>
+        <p className="form-copy">
+          This exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can
+          discover them in future sessions.
+        </p>
+        <p className="form-copy">
+          AgentKitForge does not launch Codex or verify Codex loaded the skills.
+        </p>
+
+        <label htmlFor="codex-kit-folder">Agent Kit folder</label>
+        <div className="path-picker">
+          <input
+            id="codex-kit-folder"
+            onChange={(event) => {
+              setKitPath(event.target.value);
+              setResult(null);
+            }}
+            placeholder="Choose an Agent Kit"
+            value={kitPath}
+          />
+          <button className="icon-button" disabled={isSelectingKit || isExporting} onClick={selectKitFolder} title="Select kit folder" type="button">
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.kitPath} />
+
+        <label htmlFor="codex-destination">Codex skills destination folder</label>
+        <div className="path-picker">
+          <input
+            id="codex-destination"
+            onChange={(event) => {
+              setDestinationSkillsDir(event.target.value);
+              setResult(null);
+            }}
+            placeholder="C:\\Users\\you\\.codex\\skills"
+            value={destinationSkillsDir}
+          />
+          <button className="icon-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} title="Select Codex skills folder" type="button">
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.destinationSkillsDir} />
+
+        <label className="checkbox-row" htmlFor="codex-force">
+          <input
+            checked={force}
+            id="codex-force"
+            onChange={(event) => setForce(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Force overwrite AgentKitForge-generated folders</span>
+        </label>
+
+        <button className="primary-button" disabled={isExporting} onClick={exportToCodex} type="button">
+          <Plug size={18} />
+          {isExporting ? "Exporting" : "Export/Install to Codex"}
+        </button>
+      </div>
+
+      <div className="results-panel">
+        <div className="panel-label">Codex Export Result</div>
+        <CodexExportResults
+          copyState={copyState}
+          error={error}
+          isLoading={isExporting}
+          onCopyDestinationPath={copyDestinationPath}
+          onOpenDestinationFolder={openDestinationFolder}
+          result={result}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CodexExportResults({
+  copyState,
+  error,
+  isLoading,
+  onCopyDestinationPath,
+  onOpenDestinationFolder,
+  result,
+}: {
+  copyState: "idle" | "copied" | "failed";
+  error: string | null;
+  isLoading: boolean;
+  onCopyDestinationPath: () => void;
+  onOpenDestinationFolder: () => void;
+  result: CodexExportResult | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Exporting Codex skills...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return <p className="state-copy">Export a kit to see Codex skill folders here.</p>;
+  }
+
+  return (
+    <div className="artifact-results">
+      <div className="status-banner valid">
+        <strong>Exported</strong>
+        <span>{result.exportedSkillFolders.length} skill folder{result.exportedSkillFolders.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Destination skills directory</dt>
+          <dd>{result.destinationSkillsDir}</dd>
+        </div>
+        <div>
+          <dt>Generated index folder</dt>
+          <dd>{result.generatedIndexFolder || "None"}</dd>
+        </div>
+      </dl>
+
+      {result.warnings.length > 0 && (
+        <div className="inline-warning">
+          {result.warnings.map((warning) => (
+            <div key={warning}>{warning}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="button-row">
+        <button className="secondary-button compact-button" onClick={onOpenDestinationFolder} type="button">
+          Open destination folder
+        </button>
+        <button className="secondary-button compact-button" onClick={onCopyDestinationPath} type="button">
+          Copy destination path
+        </button>
+      </div>
+      {copyState === "copied" && <div className="copy-state">Destination path copied.</div>}
+      {copyState === "failed" && <div className="field-error">Clipboard access failed.</div>}
+
+      <div className="created-files">
+        <h3>Exported skill folders</h3>
+        <ul>
+          {result.exportedSkillFolders.map((folder) => (
+            <li key={folder}>{folder}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function PackageExportResults({
   artifacts,
   copyState,
@@ -2496,6 +2758,20 @@ function validatePackageExportForm(kitPath: string, outputFolder: string) {
 
   if (outputFolder.trim() === "") {
     errors.outputFolder = "Output folder is required.";
+  }
+
+  return errors;
+}
+
+function validateCodexExportForm(kitPath: string, destinationSkillsDir: string) {
+  const errors: { kitPath?: string; destinationSkillsDir?: string } = {};
+
+  if (kitPath.trim() === "") {
+    errors.kitPath = "Kit folder is required.";
+  }
+
+  if (destinationSkillsDir.trim() === "") {
+    errors.destinationSkillsDir = "Codex skills destination folder is required.";
   }
 
   return errors;
