@@ -76,6 +76,20 @@ After creation, use **Validate created kit** to switch to validation with the de
 - `blank` uses `local-valid`
 - `financial-review` uses `trusted`
 
+## Export a One-File Markdown Bundle
+
+Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web assistant:
+
+1. Select a local Agent Kit folder.
+2. Select a Markdown output file, or select an output folder to use the default `<kit-folder-name>.md` file name.
+3. Click **Export one-file Markdown**.
+4. Upload the generated `.md` file to the assistant.
+5. Upload any task files required by the kit.
+6. Paste the generated starter prompt.
+7. Review the output before relying on it.
+
+The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill and reference sections.
+
 ## App Sections
 
 - My Kits

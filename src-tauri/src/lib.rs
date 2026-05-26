@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    fs,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -60,6 +61,19 @@ struct CreateAgentKitResult {
     files: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAgentKitOneFileInput {
+    root_path: String,
+    output_path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAgentKitOneFileResult {
+    file_path: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ValidationIssue {
     severity: String,
@@ -84,6 +98,17 @@ fn select_agent_kit_folder() -> Result<Option<String>, String> {
         .pick_folder();
 
     Ok(folder.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_onefile_output_path() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Export Agent Kit Markdown")
+        .add_filter("Markdown", &["md"])
+        .set_file_name("agent-kit.md")
+        .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -165,6 +190,39 @@ fn create_agent_kit_from_template<R: Runtime>(
         .map_err(|error| format!("Unable to parse create result: {error}"))
 }
 
+#[tauri::command]
+fn export_agent_kit_onefile<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ExportAgentKitOneFileInput,
+) -> Result<ExportAgentKitOneFileResult, String> {
+    let root_path = canonicalize_directory(&input.root_path)?;
+    let output_path = resolve_markdown_output_path(&root_path, &input.output_path)?;
+    let bridge_script = resolve_export_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&root_path)
+        .arg(&output_path)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run agentkitforge-core one-file export: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "agentkitforge-core one-file export failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse export result: {error}"))
+}
+
 fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
     let trimmed = root_path.trim();
     if trimmed.is_empty() {
@@ -188,6 +246,10 @@ fn resolve_validation_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Pa
 
 fn resolve_create_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "create-agent-kit.mjs")
+}
+
+fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "export-agent-kit-onefile.mjs")
 }
 
 fn resolve_backend_script<R: Runtime>(
@@ -259,13 +321,68 @@ fn validate_kit_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn resolve_markdown_output_path(root_path: &Path, output_path: &str) -> Result<PathBuf, String> {
+    let trimmed = output_path.trim();
+    if trimmed.is_empty() {
+        return Err("Select an output file path or output folder before exporting.".to_string());
+    }
+
+    let candidate = PathBuf::from(trimmed);
+
+    if candidate.exists() {
+        let metadata = fs::metadata(&candidate)
+            .map_err(|error| format!("Unable to inspect output path: {error}"))?;
+        if metadata.is_dir() {
+            return Ok(candidate
+                .canonicalize()
+                .map_err(|error| format!("Unable to access output folder: {error}"))?
+                .join(default_markdown_file_name(root_path)));
+        }
+    }
+
+    let mut file_path = candidate;
+    if file_path.extension().is_none() {
+        file_path.set_extension("md");
+    }
+
+    let parent = file_path
+        .parent()
+        .ok_or_else(|| "Output file must have a parent folder.".to_string())?;
+
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Unable to access output folder: {error}"))?;
+
+    if !canonical_parent.is_dir() {
+        return Err("Output parent path is not a folder.".to_string());
+    }
+
+    let file_name = file_path
+        .file_name()
+        .ok_or_else(|| "Output file path must include a file name.".to_string())?;
+
+    Ok(canonical_parent.join(file_name))
+}
+
+fn default_markdown_file_name(root_path: &Path) -> String {
+    let stem = root_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("agent-kit");
+
+    format!("{stem}.md")
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             select_agent_kit_folder,
+            select_onefile_output_path,
             validate_agent_kit,
-            create_agent_kit_from_template
+            create_agent_kit_from_template,
+            export_agent_kit_onefile
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

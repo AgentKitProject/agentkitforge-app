@@ -55,6 +55,10 @@ type CreateAgentKitInput = {
   force: boolean;
 };
 
+type ExportAgentKitResult = {
+  filePath: string;
+};
+
 type NavItem = {
   id: SectionId;
   label: string;
@@ -63,6 +67,8 @@ type NavItem = {
 
 const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "trusted", "verified"];
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
+const starterPrompt =
+  "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -488,34 +494,294 @@ function ValidateScreen({
 }
 
 function UseScreen({ currentKitPath }: { currentKitPath: string }) {
+  const [kitPath, setKitPath] = useState(currentKitPath);
+  const [outputPath, setOutputPath] = useState("");
+  const [result, setResult] = useState<ExportAgentKitResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; outputPath?: string }>({});
+  const [isSelectingKit, setIsSelectingKit] = useState(false);
+  const [isSelectingOutput, setIsSelectingOutput] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  async function selectKitFolder() {
+    setIsSelectingKit(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setKitPath(selectedPath);
+        setResult(null);
+        setFieldErrors((current) => ({ ...current, kitPath: undefined }));
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingKit(false);
+    }
+  }
+
+  async function selectOutputFile() {
+    setIsSelectingOutput(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_onefile_output_path");
+      if (selectedPath) {
+        setOutputPath(selectedPath);
+        setResult(null);
+        setFieldErrors((current) => ({ ...current, outputPath: undefined }));
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingOutput(false);
+    }
+  }
+
+  async function selectOutputFolder() {
+    setIsSelectingOutput(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setOutputPath(selectedPath);
+        setResult(null);
+        setFieldErrors((current) => ({ ...current, outputPath: undefined }));
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingOutput(false);
+    }
+  }
+
+  async function exportOneFile() {
+    const validationErrors = validateExportForm(kitPath, outputPath);
+    setFieldErrors(validationErrors);
+    setError(null);
+    setResult(null);
+    setCopyState("idle");
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsExporting(true);
+
+    try {
+      const exportResult = await invoke<ExportAgentKitResult>("export_agent_kit_onefile", {
+        input: {
+          rootPath: kitPath,
+          outputPath,
+        },
+      });
+      setResult(exportResult);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
+  async function copyStarterPrompt() {
+    try {
+      await navigator.clipboard.writeText(starterPrompt);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+
   return (
     <div className="form-layout">
       <div className="form-panel">
         <label htmlFor="use-kit">Select kit</label>
-        <input id="use-kit" placeholder="Choose an Agent Kit" readOnly value={currentKitPath} />
+        <div className="path-picker">
+          <input
+            id="use-kit"
+            onChange={(event) => {
+              setKitPath(event.target.value);
+              setResult(null);
+            }}
+            placeholder="Choose an Agent Kit"
+            value={kitPath}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelectingKit || isExporting}
+            onClick={selectKitFolder}
+            title="Select kit folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.kitPath} />
+
+        <label htmlFor="onefile-output">Output file path or folder</label>
+        <div className="path-picker double-action">
+          <input
+            id="onefile-output"
+            onChange={(event) => {
+              setOutputPath(event.target.value);
+              setResult(null);
+            }}
+            placeholder="C:\\kits\\exports\\agent-kit.md"
+            value={outputPath}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelectingOutput || isExporting}
+            onClick={selectOutputFile}
+            title="Select output file"
+            type="button"
+          >
+            <FileArchive size={18} />
+          </button>
+          <button
+            className="icon-button"
+            disabled={isSelectingOutput || isExporting}
+            onClick={selectOutputFolder}
+            title="Select output folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.outputPath} />
+
+        <button
+          className="primary-button"
+          disabled={isExporting}
+          onClick={exportOneFile}
+          type="button"
+        >
+          <FileArchive size={18} />
+          {isExporting ? "Exporting" : "Export one-file Markdown"}
+        </button>
       </div>
 
-      <div className="screen-grid compact">
-        <PlaceholderCard
-          description="Open a selected kit in the Forge runtime surface."
-          icon={PlayCircle}
-          title="Use inside Forge"
-        />
-        <PlaceholderCard
-          description="Prepare a kit export that can be installed or used in ChatGPT workflows."
-          icon={PackageOpen}
-          title="Prepare for ChatGPT"
-        />
-        <PlaceholderCard
-          description="Create a single portable Markdown document from the current kit."
-          icon={FileArchive}
-          title="Export one-file Markdown"
-        />
+      <div className="build-side">
+        <div className="results-panel">
+          <div className="panel-label">Export Result</div>
+          <OneFileExportResults
+            copyState={copyState}
+            error={error}
+            isLoading={isExporting}
+            onCopyStarterPrompt={copyStarterPrompt}
+            result={result}
+          />
+        </div>
+
+        <div className="screen-grid compact">
+          <PlaceholderCard
+            description="Open a selected kit in the Forge runtime surface."
+            icon={PlayCircle}
+            title="Use inside Forge"
+          />
+          <PlaceholderCard
+            description="Prepare install adapters for local coding assistants."
+            icon={PackageOpen}
+            title="Install adapters"
+          />
+        </div>
       </div>
     </div>
   );
 }
 
+function OneFileExportResults({
+  copyState,
+  error,
+  isLoading,
+  onCopyStarterPrompt,
+  result,
+}: {
+  copyState: "idle" | "copied" | "failed";
+  error: string | null;
+  isLoading: boolean;
+  onCopyStarterPrompt: () => void;
+  result: ExportAgentKitResult | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Exporting Agent Kit instructions...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <p className="state-copy">
+        Export a selected kit into one Markdown file for use with ChatGPT, Claude, or another web
+        assistant.
+      </p>
+    );
+  }
+
+  return (
+    <div className="onefile-result">
+      <div className="status-banner valid">
+        <strong>Exported</strong>
+        <span>Markdown bundle ready</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Generated file</dt>
+          <dd>{result.filePath}</dd>
+        </div>
+      </dl>
+
+      <div className="starter-prompt-panel">
+        <div className="panel-heading">
+          <h3>Starter prompt</h3>
+          <button className="secondary-button compact-button" onClick={onCopyStarterPrompt} type="button">
+            Copy Starter Prompt
+          </button>
+        </div>
+        <p>{starterPrompt}</p>
+        {copyState === "copied" && <div className="copy-state">Copied to clipboard.</div>}
+        {copyState === "failed" && (
+          <div className="field-error">Clipboard access failed. Select and copy the prompt text.</div>
+        )}
+      </div>
+
+      <div className="usage-steps">
+        <h3>Use with a web assistant</h3>
+        <ol>
+          <li>Open ChatGPT, Claude, or another AI assistant.</li>
+          <li>Upload the generated .md file.</li>
+          <li>Upload any task files required by the kit.</li>
+          <li>Paste the starter prompt.</li>
+          <li>Review the output before relying on it.</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+function validateExportForm(kitPath: string, outputPath: string) {
+  const errors: { kitPath?: string; outputPath?: string } = {};
+
+  if (kitPath.trim() === "") {
+    errors.kitPath = "Kit folder is required.";
+  }
+
+  if (outputPath.trim() === "") {
+    errors.outputPath = "Output file path or output folder is required.";
+  }
+
+  return errors;
+}
 function SettingsScreen({
   appState,
   onUpdate,

@@ -351,6 +351,10 @@ textarea {
   gap: 8px;
 }
 
+.path-picker.double-action {
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
+}
+
 .icon-button {
   display: inline-grid;
   min-height: 42px;
@@ -403,6 +407,62 @@ textarea {
   display: grid;
   gap: 16px;
   margin-top: 14px;
+}
+
+.onefile-result {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.starter-prompt-panel,
+.usage-steps {
+  padding: 14px;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-heading h3,
+.usage-steps h3 {
+  margin: 0;
+  color: #253047;
+  font-size: 0.95rem;
+}
+
+.starter-prompt-panel p {
+  margin: 12px 0 0;
+  color: #354155;
+  line-height: 1.55;
+}
+
+.compact-button {
+  min-height: 34px;
+  margin-top: 0;
+  white-space: nowrap;
+}
+
+.copy-state {
+  margin-top: 10px;
+  color: #12523a;
+  font-size: 0.84rem;
+  font-weight: 680;
+}
+
+.usage-steps ol {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: #354155;
+  line-height: 1.45;
 }
 
 .validation-report {
