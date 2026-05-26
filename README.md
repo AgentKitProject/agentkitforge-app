@@ -90,6 +90,24 @@ Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web
 
 The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill and reference sections.
 
+## Use Inside Forge With OpenAI
+
+Open Settings and save an OpenAI API key before using the built-in runtime. The key is stored locally in the app settings file on this machine and is not committed by the repo. This is a temporary local-storage approach for early development, so do not share local app data or check generated settings files into source control.
+
+The default model is `gpt-5-mini`, which is intended as a cost-efficient model for well-defined text tasks. You can change the default model in Settings or override it in the Use screen.
+
+To run a kit inside Forge:
+
+1. Open the Use section.
+2. Select a local Agent Kit folder.
+3. Enter the task.
+4. Optionally add extra context.
+5. Confirm the model and output token limit.
+6. Click **Run**.
+7. Review the response before relying on it.
+
+For v0.1, Forge includes `AGENTKIT.md`, every `skills/*/SKILL.md` file, and supported files from `policies/` and `templates/` in the OpenAI prompt. Advanced skill routing and file uploads are not implemented yet.
+
 ## App Sections
 
 - My Kits

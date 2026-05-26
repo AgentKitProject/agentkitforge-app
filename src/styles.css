@@ -288,6 +288,11 @@ textarea {
   gap: 22px;
 }
 
+.use-screen {
+  display: grid;
+  gap: 26px;
+}
+
 .placeholder-card,
 .form-panel,
 .results-panel {
@@ -390,6 +395,51 @@ textarea {
   line-height: 1.35;
 }
 
+.inline-warning {
+  padding: 10px 12px;
+  color: #674b12;
+  background: #fff8e6;
+  border: 1px solid #ead38b;
+  border-radius: 8px;
+  line-height: 1.45;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.button-row .primary-button,
+.button-row .secondary-button,
+.settings-inline-button {
+  margin-top: 0;
+}
+
+.settings-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.secret-status {
+  display: inline-flex;
+  width: fit-content;
+  padding: 6px 10px;
+  color: #7a2323;
+  background: #fff1f1;
+  border: 1px solid #f2c7c8;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.secret-status.saved {
+  color: #12523a;
+  background: #edf8f2;
+  border-color: #b9e5cd;
+}
+
 .checkbox-row {
   display: inline-flex;
   align-items: center;
@@ -413,6 +463,28 @@ textarea {
   display: grid;
   gap: 16px;
   margin-top: 14px;
+}
+
+.forge-result {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.runtime-results-panel {
+  min-height: 460px;
+}
+
+.assistant-response {
+  overflow: auto;
+  max-height: 520px;
+  padding: 14px;
+  color: #253047;
+  white-space: pre-wrap;
+  line-height: 1.55;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
 }
 
 .starter-prompt-panel,

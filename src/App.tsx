@@ -12,7 +12,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
@@ -59,6 +59,16 @@ type ExportAgentKitResult = {
   filePath: string;
 };
 
+type PublicSettings = {
+  hasOpenaiApiKey: boolean;
+  defaultModel: string;
+};
+
+type RunAgentKitResult = {
+  response: string;
+  model: string;
+};
+
 type NavItem = {
   id: SectionId;
   label: string;
@@ -69,6 +79,7 @@ const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
 const starterPrompt =
   "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
+const defaultRuntimeModel = "gpt-5-mini";
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -80,6 +91,10 @@ const navItems: NavItem[] = [
 
 export function App() {
   const [activeSection, setActiveSection] = useState<SectionId>("my-kits");
+  const [settings, setSettings] = useState<PublicSettings>({
+    hasOpenaiApiKey: false,
+    defaultModel: defaultRuntimeModel,
+  });
   const [appState, setAppState] = useState<AppState>({
     currentKitPath: "",
     defaultOutputFolder: "",
@@ -91,6 +106,16 @@ export function App() {
     () => navItems.find((item) => item.id === activeSection)?.label ?? "AgentKitForge",
     [activeSection],
   );
+
+  useEffect(() => {
+    invoke<PublicSettings>("get_app_settings")
+      .then((loadedSettings) => {
+        setSettings(loadedSettings);
+      })
+      .catch(() => {
+        setSettings({ hasOpenaiApiKey: false, defaultModel: defaultRuntimeModel });
+      });
+  }, []);
 
   function updateAppState<Key extends keyof AppState>(key: Key, value: AppState[Key]) {
     setAppState((current) => ({ ...current, [key]: value }));
@@ -160,7 +185,9 @@ export function App() {
               }}
             />
           )}
-          {activeSection === "use" && <UseScreen currentKitPath={appState.currentKitPath} />}
+          {activeSection === "use" && (
+            <UseScreen currentKitPath={appState.currentKitPath} settings={settings} />
+          )}
           {activeSection === "validate" && (
             <ValidateScreen
               currentKitPath={appState.currentKitPath}
@@ -170,7 +197,12 @@ export function App() {
             />
           )}
           {activeSection === "settings" && (
-            <SettingsScreen appState={appState} onUpdate={updateAppState} />
+            <SettingsScreen
+              appState={appState}
+              onSettingsChange={setSettings}
+              onUpdate={updateAppState}
+              settings={settings}
+            />
           )}
         </section>
       </main>
@@ -493,8 +525,26 @@ function ValidateScreen({
   );
 }
 
-function UseScreen({ currentKitPath }: { currentKitPath: string }) {
+function UseScreen({
+  currentKitPath,
+  settings,
+}: {
+  currentKitPath: string;
+  settings: PublicSettings;
+}) {
   const [kitPath, setKitPath] = useState(currentKitPath);
+  const [userTask, setUserTask] = useState("");
+  const [additionalContext, setAdditionalContext] = useState("");
+  const [model, setModel] = useState(settings.defaultModel || defaultRuntimeModel);
+  const [maxOutputLength, setMaxOutputLength] = useState("1800");
+  const [runResult, setRunResult] = useState<RunAgentKitResult | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runFieldErrors, setRunFieldErrors] = useState<{
+    apiKey?: string;
+    kitPath?: string;
+    userTask?: string;
+  }>({});
+  const [isRunning, setIsRunning] = useState(false);
   const [outputPath, setOutputPath] = useState("");
   const [result, setResult] = useState<ExportAgentKitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -503,22 +553,67 @@ function UseScreen({ currentKitPath }: { currentKitPath: string }) {
   const [isSelectingOutput, setIsSelectingOutput] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [resultCopyState, setResultCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    setKitPath(currentKitPath);
+  }, [currentKitPath]);
+
+  useEffect(() => {
+    setModel(settings.defaultModel || defaultRuntimeModel);
+  }, [settings.defaultModel]);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
     setError(null);
+    setRunError(null);
 
     try {
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setKitPath(selectedPath);
         setResult(null);
+        setRunResult(null);
         setFieldErrors((current) => ({ ...current, kitPath: undefined }));
+        setRunFieldErrors((current) => ({ ...current, kitPath: undefined }));
       }
     } catch (caughtError) {
-      setError(errorToMessage(caughtError));
+      const message = errorToMessage(caughtError);
+      setError(message);
+      setRunError(message);
     } finally {
       setIsSelectingKit(false);
+    }
+  }
+
+  async function runInsideForge() {
+    const validationErrors = validateRunForm(settings, kitPath, userTask);
+    setRunFieldErrors(validationErrors);
+    setRunError(null);
+    setRunResult(null);
+    setResultCopyState("idle");
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsRunning(true);
+
+    try {
+      const runtimeResult = await invoke<RunAgentKitResult>("run_agent_kit_with_openai", {
+        input: {
+          kitPath,
+          userTask,
+          additionalContext,
+          model,
+          maxOutputLength: Number.parseInt(maxOutputLength, 10) || undefined,
+        },
+      });
+      setRunResult(runtimeResult);
+    } catch (caughtError) {
+      setRunError(errorToMessage(caughtError));
+    } finally {
+      setIsRunning(false);
     }
   }
 
@@ -595,76 +690,188 @@ function UseScreen({ currentKitPath }: { currentKitPath: string }) {
     }
   }
 
+  async function copyRunResult() {
+    if (!runResult?.response) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(runResult.response);
+      setResultCopyState("copied");
+    } catch {
+      setResultCopyState("failed");
+    }
+  }
+
   return (
-    <div className="form-layout">
-      <div className="form-panel">
-        <label htmlFor="use-kit">Select kit</label>
-        <div className="path-picker">
-          <input
-            id="use-kit"
+    <div className="use-screen">
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Use inside Forge</h2>
+
+          {!settings.hasOpenaiApiKey && (
+            <div className="inline-warning">Add an OpenAI API key in Settings before running.</div>
+          )}
+
+          <label htmlFor="runtime-kit">Select kit folder</label>
+          <div className="path-picker">
+            <input
+              id="runtime-kit"
+              onChange={(event) => {
+                setKitPath(event.target.value);
+                setRunResult(null);
+                setResult(null);
+              }}
+              placeholder="Choose an Agent Kit"
+              value={kitPath}
+            />
+            <button
+              className="icon-button"
+              disabled={isSelectingKit || isRunning || isExporting}
+              onClick={selectKitFolder}
+              title="Select kit folder"
+              type="button"
+            >
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={runFieldErrors.kitPath} />
+          <FieldError message={runFieldErrors.apiKey} />
+
+          <label htmlFor="runtime-task">Task</label>
+          <textarea
+            id="runtime-task"
             onChange={(event) => {
-              setKitPath(event.target.value);
-              setResult(null);
+              setUserTask(event.target.value);
+              setRunResult(null);
             }}
-            placeholder="Choose an Agent Kit"
-            value={kitPath}
+            placeholder="Describe what you want this Agent Kit to help with."
+            rows={6}
+            value={userTask}
           />
+          <FieldError message={runFieldErrors.userTask} />
+
+          <label htmlFor="runtime-context">Additional context</label>
+          <textarea
+            id="runtime-context"
+            onChange={(event) => {
+              setAdditionalContext(event.target.value);
+              setRunResult(null);
+            }}
+            placeholder="Optional background, constraints, or inputs to include."
+            rows={4}
+            value={additionalContext}
+          />
+
+          <label htmlFor="runtime-model">Model</label>
+          <input
+            id="runtime-model"
+            onChange={(event) => setModel(event.target.value)}
+            value={model}
+          />
+
+          <label htmlFor="runtime-max-output">Max output tokens</label>
+          <input
+            id="runtime-max-output"
+            min="256"
+            onChange={(event) => setMaxOutputLength(event.target.value)}
+            type="number"
+            value={maxOutputLength}
+          />
+
           <button
-            className="icon-button"
-            disabled={isSelectingKit || isExporting}
-            onClick={selectKitFolder}
-            title="Select kit folder"
+            className="primary-button"
+            disabled={isRunning}
+            onClick={runInsideForge}
             type="button"
           >
-            <FolderOpen size={18} />
+            <PlayCircle size={18} />
+            {isRunning ? "Running" : "Run"}
           </button>
         </div>
-        <FieldError message={fieldErrors.kitPath} />
 
-        <label htmlFor="onefile-output">Output file path or folder</label>
-        <div className="path-picker double-action">
-          <input
-            id="onefile-output"
-            onChange={(event) => {
-              setOutputPath(event.target.value);
-              setResult(null);
-            }}
-            placeholder="C:\\kits\\exports\\agent-kit.md"
-            value={outputPath}
+        <div className="results-panel runtime-results-panel">
+          <div className="panel-label">Forge Result</div>
+          <ForgeRunResults
+            copyState={resultCopyState}
+            error={runError}
+            isLoading={isRunning}
+            onCopyResult={copyRunResult}
+            result={runResult}
           />
+        </div>
+      </div>
+
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Prepare for ChatGPT or Claude</h2>
+
+          <label htmlFor="use-kit">Select kit folder</label>
+          <div className="path-picker">
+            <input
+              id="use-kit"
+              onChange={(event) => {
+                setKitPath(event.target.value);
+                setResult(null);
+              }}
+              placeholder="Choose an Agent Kit"
+              value={kitPath}
+            />
+            <button
+              className="icon-button"
+              disabled={isSelectingKit || isExporting || isRunning}
+              onClick={selectKitFolder}
+              title="Select kit folder"
+              type="button"
+            >
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={fieldErrors.kitPath} />
+
+          <label htmlFor="onefile-output">Output file path or folder</label>
+          <div className="path-picker double-action">
+            <input
+              id="onefile-output"
+              onChange={(event) => {
+                setOutputPath(event.target.value);
+                setResult(null);
+              }}
+              placeholder="C:\\kits\\exports\\agent-kit.md"
+              value={outputPath}
+            />
+            <button
+              className="icon-button"
+              disabled={isSelectingOutput || isExporting}
+              onClick={selectOutputFile}
+              title="Select output file"
+              type="button"
+            >
+              <FileArchive size={18} />
+            </button>
+            <button
+              className="icon-button"
+              disabled={isSelectingOutput || isExporting}
+              onClick={selectOutputFolder}
+              title="Select output folder"
+              type="button"
+            >
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={fieldErrors.outputPath} />
+
           <button
-            className="icon-button"
-            disabled={isSelectingOutput || isExporting}
-            onClick={selectOutputFile}
-            title="Select output file"
+            className="primary-button"
+            disabled={isExporting}
+            onClick={exportOneFile}
             type="button"
           >
             <FileArchive size={18} />
-          </button>
-          <button
-            className="icon-button"
-            disabled={isSelectingOutput || isExporting}
-            onClick={selectOutputFolder}
-            title="Select output folder"
-            type="button"
-          >
-            <FolderOpen size={18} />
+            {isExporting ? "Exporting" : "Export one-file Markdown"}
           </button>
         </div>
-        <FieldError message={fieldErrors.outputPath} />
 
-        <button
-          className="primary-button"
-          disabled={isExporting}
-          onClick={exportOneFile}
-          type="button"
-        >
-          <FileArchive size={18} />
-          {isExporting ? "Exporting" : "Export one-file Markdown"}
-        </button>
-      </div>
-
-      <div className="build-side">
         <div className="results-panel">
           <div className="panel-label">Export Result</div>
           <OneFileExportResults
@@ -675,20 +882,64 @@ function UseScreen({ currentKitPath }: { currentKitPath: string }) {
             result={result}
           />
         </div>
-
-        <div className="screen-grid compact">
-          <PlaceholderCard
-            description="Open a selected kit in the Forge runtime surface."
-            icon={PlayCircle}
-            title="Use inside Forge"
-          />
-          <PlaceholderCard
-            description="Prepare install adapters for local coding assistants."
-            icon={PackageOpen}
-            title="Install adapters"
-          />
-        </div>
       </div>
+    </div>
+  );
+}
+
+function ForgeRunResults({
+  copyState,
+  error,
+  isLoading,
+  onCopyResult,
+  result,
+}: {
+  copyState: "idle" | "copied" | "failed";
+  error: string | null;
+  isLoading: boolean;
+  onCopyResult: () => void;
+  result: RunAgentKitResult | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Running the Agent Kit with OpenAI...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <p className="state-copy">
+        Select a kit, describe the task, and run it inside Forge. v0.1 includes every skill in the
+        prompt context.
+      </p>
+    );
+  }
+
+  return (
+    <div className="forge-result">
+      <div className="status-banner valid">
+        <strong>Complete</strong>
+        <span>{result.model}</span>
+      </div>
+
+      <div className="panel-heading">
+        <h3>Response</h3>
+        <button className="secondary-button compact-button" onClick={onCopyResult} type="button">
+          Copy result
+        </button>
+      </div>
+
+      <div className="assistant-response">{result.response}</div>
+      {copyState === "copied" && <div className="copy-state">Copied to clipboard.</div>}
+      {copyState === "failed" && (
+        <div className="field-error">Clipboard access failed. Select and copy the result text.</div>
+      )}
     </div>
   );
 }
@@ -782,26 +1033,165 @@ function validateExportForm(kitPath: string, outputPath: string) {
 
   return errors;
 }
+
+function validateRunForm(settings: PublicSettings, kitPath: string, userTask: string) {
+  const errors: { apiKey?: string; kitPath?: string; userTask?: string } = {};
+
+  if (!settings.hasOpenaiApiKey) {
+    errors.apiKey = "OpenAI API key is required. Save it in Settings first.";
+  }
+
+  if (kitPath.trim() === "") {
+    errors.kitPath = "Kit folder is required.";
+  }
+
+  if (userTask.trim() === "") {
+    errors.userTask = "Task is required.";
+  }
+
+  return errors;
+}
+
 function SettingsScreen({
   appState,
+  onSettingsChange,
   onUpdate,
+  settings,
 }: {
   appState: AppState;
+  onSettingsChange: (settings: PublicSettings) => void;
   onUpdate: <Key extends keyof AppState>(key: Key, value: AppState[Key]) => void;
+  settings: PublicSettings;
 }) {
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isClearingKey, setIsClearingKey] = useState(false);
+  const [defaultModel, setDefaultModel] = useState(settings.defaultModel);
+  const [isSavingModel, setIsSavingModel] = useState(false);
+
+  useEffect(() => {
+    setDefaultModel(settings.defaultModel);
+  }, [settings.defaultModel]);
+
+  async function saveApiKey() {
+    setIsSavingKey(true);
+    setSettingsError(null);
+    setSettingsMessage(null);
+
+    try {
+      const updatedSettings = await invoke<PublicSettings>("save_openai_api_key", {
+        apiKey: appState.openAiApiKey,
+      });
+      onSettingsChange(updatedSettings);
+      onUpdate("openAiApiKey", "");
+      setSettingsMessage("OpenAI API key saved locally.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  async function clearApiKey() {
+    setIsClearingKey(true);
+    setSettingsError(null);
+    setSettingsMessage(null);
+
+    try {
+      const updatedSettings = await invoke<PublicSettings>("clear_openai_api_key");
+      onSettingsChange(updatedSettings);
+      onUpdate("openAiApiKey", "");
+      setSettingsMessage("OpenAI API key cleared.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsClearingKey(false);
+    }
+  }
+
+  async function saveModel() {
+    setIsSavingModel(true);
+    setSettingsError(null);
+    setSettingsMessage(null);
+
+    try {
+      const updatedSettings = await invoke<PublicSettings>("save_default_model", {
+        model: defaultModel,
+      });
+      onSettingsChange(updatedSettings);
+      setSettingsMessage("Default model saved.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsSavingModel(false);
+    }
+  }
+
   return (
     <div className="form-panel settings-panel">
+      <div className="settings-status-row">
+        <span className={`secret-status ${settings.hasOpenaiApiKey ? "saved" : ""}`}>
+          {settings.hasOpenaiApiKey ? "API key saved" : "No API key saved"}
+        </span>
+      </div>
+
       <label htmlFor="openai-api-key">OpenAI API key</label>
       <div className="input-with-icon">
         <KeyRound size={18} />
         <input
           id="openai-api-key"
           onChange={(event) => onUpdate("openAiApiKey", event.target.value)}
-          placeholder="sk-..."
+          placeholder={settings.hasOpenaiApiKey ? "Saved key is hidden" : "sk-..."}
           type="password"
           value={appState.openAiApiKey}
         />
       </div>
+      <div className="button-row">
+        <button
+          className="primary-button"
+          disabled={isSavingKey}
+          onClick={saveApiKey}
+          type="button"
+        >
+          {isSavingKey ? "Saving" : "Save API key"}
+        </button>
+        <button
+          className="secondary-button"
+          disabled={isClearingKey || !settings.hasOpenaiApiKey}
+          onClick={clearApiKey}
+          type="button"
+        >
+          {isClearingKey ? "Clearing" : "Clear API key"}
+        </button>
+      </div>
+
+      <label htmlFor="default-runtime-model">Default OpenAI model</label>
+      <input
+        id="default-runtime-model"
+        onChange={(event) => setDefaultModel(event.target.value)}
+        value={defaultModel}
+      />
+      <button
+        className="secondary-button settings-inline-button"
+        disabled={isSavingModel}
+        onClick={saveModel}
+        type="button"
+      >
+        {isSavingModel ? "Saving" : "Save model"}
+      </button>
+
+      <div className="inline-warning">
+        The API key is stored in a local settings file on this machine. Do not commit or share local
+        app data.
+      </div>
+
+      {settingsMessage && <div className="copy-state">{settingsMessage}</div>}
+      {settingsError && (
+        <div className="error-state" role="alert">
+          {settingsError}
+        </div>
+      )}
 
       <label htmlFor="default-output-folder">Default output folder</label>
       <input

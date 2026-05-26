@@ -6,6 +6,9 @@ use std::{
 };
 use tauri::{Manager, Runtime};
 
+mod openai_runtime;
+mod settings;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum ValidationProfile {
@@ -223,6 +226,43 @@ fn export_agent_kit_onefile<R: Runtime>(
         .map_err(|error| format!("Unable to parse export result: {error}"))
 }
 
+#[tauri::command]
+fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
+    settings::get_public_settings(&app)
+}
+
+#[tauri::command]
+fn save_openai_api_key<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    api_key: String,
+) -> Result<settings::PublicSettings, String> {
+    settings::save_openai_api_key(&app, api_key)
+}
+
+#[tauri::command]
+fn clear_openai_api_key<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<settings::PublicSettings, String> {
+    settings::clear_openai_api_key(&app)
+}
+
+#[tauri::command]
+fn save_default_model<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    model: String,
+) -> Result<settings::PublicSettings, String> {
+    settings::save_default_model(&app, model)
+}
+
+#[tauri::command]
+async fn run_agent_kit_with_openai<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: openai_runtime::RunAgentKitInput,
+) -> Result<openai_runtime::RunAgentKitResult, String> {
+    let api_key = settings::get_openai_api_key(&app)?;
+    openai_runtime::run_agent_kit_with_openai(api_key, input).await
+}
+
 fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
     let trimmed = root_path.trim();
     if trimmed.is_empty() {
@@ -382,7 +422,12 @@ pub fn run() {
             select_onefile_output_path,
             validate_agent_kit,
             create_agent_kit_from_template,
-            export_agent_kit_onefile
+            export_agent_kit_onefile,
+            get_app_settings,
+            save_openai_api_key,
+            clear_openai_api_key,
+            save_default_model,
+            run_agent_kit_with_openai
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
