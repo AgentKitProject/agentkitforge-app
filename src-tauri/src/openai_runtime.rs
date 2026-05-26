@@ -1,6 +1,6 @@
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::{path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,7 @@ pub struct RunAgentKitInput {
 pub struct RunAgentKitResult {
     pub response: String,
     pub model: String,
+    pub kit_name: Option<String>,
     pub context: AgentKitContextDetails,
 }
 
@@ -111,7 +112,7 @@ pub async fn run_agent_kit_with_openai(
     working_directory: std::path::PathBuf,
     node_command: String,
 ) -> Result<RunAgentKitResult, String> {
-    canonicalize_kit_path(&input.kit_path)?;
+    let kit_root = canonicalize_kit_path(&input.kit_path)?;
     let task = required("Task", &input.user_task)?;
     let model = input
         .model
@@ -160,6 +161,7 @@ pub async fn run_agent_kit_with_openai(
     Ok(RunAgentKitResult {
         response: response_text,
         model,
+        kit_name: read_kit_name(&kit_root),
         context: AgentKitContextDetails {
             included_files: context.included_files,
             included_skills: context.included_skills,
@@ -169,7 +171,7 @@ pub async fn run_agent_kit_with_openai(
     })
 }
 
-fn canonicalize_kit_path(kit_path: &str) -> Result<(), String> {
+fn canonicalize_kit_path(kit_path: &str) -> Result<std::path::PathBuf, String> {
     let trimmed = kit_path.trim();
     if trimmed.is_empty() {
         return Err("Select an Agent Kit folder before running inside Forge.".to_string());
@@ -183,7 +185,40 @@ fn canonicalize_kit_path(kit_path: &str) -> Result<(), String> {
         return Err("Selected Agent Kit path is not a folder.".to_string());
     }
 
-    Ok(())
+    Ok(resolved)
+}
+
+fn read_kit_name(root_path: &Path) -> Option<String> {
+    let manifest = fs::read_to_string(root_path.join("agentkit.yaml")).ok()?;
+    read_manifest_scalar(&manifest, "name")
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| read_manifest_scalar(&manifest, "id").filter(|value| !value.trim().is_empty()))
+}
+
+fn read_manifest_scalar(manifest: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    manifest.lines().find_map(|line| {
+        if line.starts_with(' ') || !line.trim_start().starts_with(&prefix) {
+            return None;
+        }
+
+        let value = line.split_once(':')?.1.trim();
+        Some(unquote_yaml_scalar(value))
+    })
+}
+
+fn unquote_yaml_scalar(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        trimmed[1..trimmed.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 async fn build_context(

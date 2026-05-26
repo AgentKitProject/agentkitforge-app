@@ -148,7 +148,13 @@ type PublicSettings = {
 type RunAgentKitResult = {
   response: string;
   model: string;
+  kitName?: string;
   context: AgentKitContextDetails;
+};
+
+type AgentKitStarterHint = {
+  sourceFile: string;
+  excerpt: string;
 };
 
 type AgentKitContextMode = "all" | "triggered";
@@ -1578,19 +1584,28 @@ function UseScreen({
   const [maxOutputLength, setMaxOutputLength] = useState("1800");
   const [contextMode, setContextMode] = useState<AgentKitContextMode>(settings.preferredContextMode);
   const [contextTarget, setContextTarget] = useState<AgentKitContextTarget>("openai");
+  const [validationProfile, setValidationProfile] = useState<ValidationProfile>(settings.preferredValidationProfile);
+  const [validateBeforeRun, setValidateBeforeRun] = useState(true);
   const [includePolicies, setIncludePolicies] = useState(settings.includePolicies);
   const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
   const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
   const [includeReferences, setIncludeReferences] = useState(settings.includeReferences);
   const [maxSkills, setMaxSkills] = useState("");
   const [runResult, setRunResult] = useState<RunAgentKitResult | null>(null);
+  const [runCompletedAt, setRunCompletedAt] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [preRunValidationReport, setPreRunValidationReport] = useState<ValidationReport | null>(null);
+  const [starterHint, setStarterHint] = useState<AgentKitStarterHint | null>(null);
+  const [starterHintError, setStarterHintError] = useState<string | null>(null);
+  const [savedResponsePath, setSavedResponsePath] = useState<string | null>(null);
   const [runFieldErrors, setRunFieldErrors] = useState<{
     apiKey?: string;
     kitPath?: string;
     userTask?: string;
   }>({});
   const [isRunning, setIsRunning] = useState(false);
+  const [isLoadingStarterHint, setIsLoadingStarterHint] = useState(false);
+  const [isSavingResponse, setIsSavingResponse] = useState(false);
   const [outputPath, setOutputPath] = useState(settings.defaultOutputFolder);
   const [result, setResult] = useState<ExportAgentKitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1608,12 +1623,47 @@ function UseScreen({
   useEffect(() => {
     setModel(settings.defaultModel || defaultRuntimeModel);
     setContextMode(settings.preferredContextMode);
+    setValidationProfile(settings.preferredValidationProfile);
     setIncludePolicies(settings.includePolicies);
     setIncludeTemplates(settings.includeTemplates);
     setIncludeWorkflows(settings.includeWorkflows);
     setIncludeReferences(settings.includeReferences);
     setOutputPath((current) => current || settings.defaultOutputFolder);
   }, [settings]);
+
+  useEffect(() => {
+    const trimmedPath = kitPath.trim();
+    setStarterHint(null);
+    setStarterHintError(null);
+
+    if (!trimmedPath) {
+      return;
+    }
+
+    let isCurrent = true;
+    setIsLoadingStarterHint(true);
+
+    invoke<AgentKitStarterHint | null>("get_agent_kit_starter_hint", { rootPath: trimmedPath })
+      .then((hint) => {
+        if (isCurrent) {
+          setStarterHint(hint);
+        }
+      })
+      .catch((caughtError) => {
+        if (isCurrent) {
+          setStarterHintError(errorToMessage(caughtError));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsLoadingStarterHint(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [kitPath]);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
@@ -1643,6 +1693,9 @@ function UseScreen({
     setRunFieldErrors(validationErrors);
     setRunError(null);
     setRunResult(null);
+    setRunCompletedAt(null);
+    setPreRunValidationReport(null);
+    setSavedResponsePath(null);
     setResultCopyState("idle");
 
     if (Object.keys(validationErrors).length > 0) {
@@ -1652,6 +1705,21 @@ function UseScreen({
     setIsRunning(true);
 
     try {
+      if (validateBeforeRun) {
+        const validationReport = await invoke<ValidationReport>("validate_agent_kit", {
+          rootPath: kitPath,
+          profile: validationProfile,
+        });
+        setPreRunValidationReport(validationReport);
+
+        if (!validationReport.valid) {
+          setRunError(
+            "Validation failed. Fix the issues below, or turn off Validate before running if you intentionally want to continue.",
+          );
+          return;
+        }
+      }
+
       const runtimeResult = await invoke<RunAgentKitResult>("run_agent_kit_with_openai", {
         input: {
           kitPath,
@@ -1669,6 +1737,7 @@ function UseScreen({
         },
       });
       setRunResult(runtimeResult);
+      setRunCompletedAt(new Date().toISOString());
     } catch (caughtError) {
       setRunError(errorToMessage(caughtError));
     } finally {
@@ -1762,6 +1831,50 @@ function UseScreen({
     }
   }
 
+  async function saveRunResult() {
+    if (!runResult?.response) {
+      return;
+    }
+
+    setIsSavingResponse(true);
+    setRunError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_forge_response_output_path");
+      if (!selectedPath) {
+        return;
+      }
+
+      const saveResult = await invoke<{ filePath: string }>("save_markdown_file", {
+        input: {
+          content: formatRunResultMarkdown(
+            runResult,
+            runCompletedAt,
+            kitPath,
+            contextMode,
+            validationProfile,
+            validateBeforeRun,
+          ),
+        },
+        outputPath: selectedPath,
+      });
+      setSavedResponsePath(saveResult.filePath);
+    } catch (caughtError) {
+      setRunError(errorToMessage(caughtError));
+    } finally {
+      setIsSavingResponse(false);
+    }
+  }
+
+  function clearRunResult() {
+    setRunResult(null);
+    setRunCompletedAt(null);
+    setPreRunValidationReport(null);
+    setRunError(null);
+    setSavedResponsePath(null);
+    setResultCopyState("idle");
+  }
+
   return (
     <div className="use-screen">
       <div className="build-layout">
@@ -1804,11 +1917,17 @@ function UseScreen({
               setUserTask(event.target.value);
               setRunResult(null);
             }}
-            placeholder="Describe what you want this Agent Kit to help with."
+            placeholder="Describe the specific work you want this kit to perform. Include the desired output, audience, and any constraints."
             rows={6}
             value={userTask}
           />
           <FieldError message={runFieldErrors.userTask} />
+
+          <StarterHintPanel
+            error={starterHintError}
+            hint={starterHint}
+            isLoading={isLoadingStarterHint}
+          />
 
           <label htmlFor="runtime-context">Additional context</label>
           <textarea
@@ -1817,7 +1936,7 @@ function UseScreen({
               setAdditionalContext(event.target.value);
               setRunResult(null);
             }}
-            placeholder="Optional background, constraints, or inputs to include."
+            placeholder="Optional details such as source notes, assumptions, examples, or review criteria."
             rows={4}
             value={additionalContext}
           />
@@ -1858,6 +1977,32 @@ function UseScreen({
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="settings-grid two-column">
+            <div>
+              <label htmlFor="runtime-validation-profile">Validation profile</label>
+              <select
+                id="runtime-validation-profile"
+                onChange={(event) => setValidationProfile(event.target.value as ValidationProfile)}
+                value={validationProfile}
+              >
+                {validationProfiles.map((profile) => (
+                  <option key={profile} value={profile}>
+                    {profile}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className="checkbox-row aligned-checkbox" htmlFor="runtime-validate-before-run">
+              <input
+                checked={validateBeforeRun}
+                id="runtime-validate-before-run"
+                onChange={(event) => setValidateBeforeRun(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Validate before running</span>
+            </label>
           </div>
 
           <label htmlFor="runtime-max-skills">Max skills</label>
@@ -1926,7 +2071,7 @@ function UseScreen({
             type="button"
           >
             <PlayCircle size={18} />
-            {isRunning ? "Running" : "Run"}
+            {isRunning ? "Running" : "Run with OpenAI"}
           </button>
         </div>
 
@@ -1936,8 +2081,17 @@ function UseScreen({
             copyState={resultCopyState}
             error={runError}
             isLoading={isRunning}
+            isSavingResponse={isSavingResponse}
             onCopyResult={copyRunResult}
+            onClearResult={clearRunResult}
+            onSaveResult={saveRunResult}
+            preRunValidationReport={preRunValidationReport}
             result={runResult}
+            runCompletedAt={runCompletedAt}
+            savedResponsePath={savedResponsePath}
+            selectedContextMode={contextMode}
+            selectedKitPath={kitPath}
+            validationProfile={validationProfile}
           />
         </div>
       </div>
@@ -2628,23 +2782,46 @@ function ForgeRunResults({
   copyState,
   error,
   isLoading,
+  isSavingResponse,
   onCopyResult,
+  onClearResult,
+  onSaveResult,
+  preRunValidationReport,
   result,
+  runCompletedAt,
+  savedResponsePath,
+  selectedContextMode,
+  selectedKitPath,
+  validationProfile,
 }: {
   copyState: "idle" | "copied" | "failed";
   error: string | null;
   isLoading: boolean;
+  isSavingResponse: boolean;
   onCopyResult: () => void;
+  onClearResult: () => void;
+  onSaveResult: () => void;
+  preRunValidationReport: ValidationReport | null;
   result: RunAgentKitResult | null;
+  runCompletedAt: string | null;
+  savedResponsePath: string | null;
+  selectedContextMode: AgentKitContextMode;
+  selectedKitPath: string;
+  validationProfile: ValidationProfile;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Running the Agent Kit with OpenAI...</p>;
+    return <p className="state-copy">Validating the kit and running it with OpenAI...</p>;
   }
 
-  if (error) {
+  if (error && !result) {
     return (
-      <div className="error-state" role="alert">
-        {error}
+      <div className="forge-result">
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+        {preRunValidationReport && (
+          <ValidationResults error={null} isLoading={false} report={preRunValidationReport} />
+        )}
       </div>
     );
   }
@@ -2652,8 +2829,8 @@ function ForgeRunResults({
   if (!result) {
     return (
       <p className="state-copy">
-        Select a kit, describe the task, and run it inside Forge. v0.1 includes every skill in the
-        prompt context.
+        Select a kit, describe the task, and run it inside Forge. Triggered context uses matching
+        skills first and shows a warning if it falls back.
       </p>
     );
   }
@@ -2667,9 +2844,22 @@ function ForgeRunResults({
 
       <div className="panel-heading">
         <h3>Response</h3>
-        <button className="secondary-button compact-button" onClick={onCopyResult} type="button">
-          Copy result
-        </button>
+        <div className="button-row">
+          <button className="secondary-button compact-button" onClick={onCopyResult} type="button">
+            Copy response
+          </button>
+          <button
+            className="secondary-button compact-button"
+            disabled={isSavingResponse}
+            onClick={onSaveResult}
+            type="button"
+          >
+            {isSavingResponse ? "Saving" : "Save Markdown"}
+          </button>
+          <button className="secondary-button compact-button" onClick={onClearResult} type="button">
+            Clear
+          </button>
+        </div>
       </div>
 
       <div className="assistant-response">{result.response}</div>
@@ -2677,6 +2867,20 @@ function ForgeRunResults({
       {copyState === "failed" && (
         <div className="field-error">Clipboard access failed. Select and copy the result text.</div>
       )}
+      {savedResponsePath && <div className="copy-state">Saved to {savedResponsePath}</div>}
+      {error && (
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      )}
+
+      <RunMetadata
+        result={result}
+        runCompletedAt={runCompletedAt}
+        selectedContextMode={selectedContextMode}
+        selectedKitPath={selectedKitPath}
+        validationProfile={validationProfile}
+      />
 
       <details className="context-details">
         <summary>Context details</summary>
@@ -2709,6 +2913,86 @@ function ForgeRunResults({
         </div>
       </details>
     </div>
+  );
+}
+
+function StarterHintPanel({
+  error,
+  hint,
+  isLoading,
+}: {
+  error: string | null;
+  hint: AgentKitStarterHint | null;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return <p className="state-copy compact-state">Checking for starter guidance...</p>;
+  }
+
+  if (error) {
+    return null;
+  }
+
+  if (!hint) {
+    return null;
+  }
+
+  return (
+    <div className="starter-hint-panel">
+      <strong>Starter hint from {hint.sourceFile}</strong>
+      <p>{hint.excerpt}</p>
+    </div>
+  );
+}
+
+function RunMetadata({
+  result,
+  runCompletedAt,
+  selectedContextMode,
+  selectedKitPath,
+  validationProfile,
+}: {
+  result: RunAgentKitResult;
+  runCompletedAt: string | null;
+  selectedContextMode: AgentKitContextMode;
+  selectedKitPath: string;
+  validationProfile: ValidationProfile;
+}) {
+  return (
+    <dl className="report-meta run-meta">
+      <div>
+        <dt>Kit</dt>
+        <dd>{result.kitName || selectedKitPath || "Selected kit"}</dd>
+      </div>
+      <div>
+        <dt>Model</dt>
+        <dd>{result.model}</dd>
+      </div>
+      <div>
+        <dt>Context mode</dt>
+        <dd>{selectedContextMode}</dd>
+      </div>
+      <div>
+        <dt>Validation profile</dt>
+        <dd>{validationProfile}</dd>
+      </div>
+      <div>
+        <dt>Included skills</dt>
+        <dd>{result.context.includedSkills.length > 0 ? result.context.includedSkills.join(", ") : "None"}</dd>
+      </div>
+      <div>
+        <dt>Included files</dt>
+        <dd>{result.context.includedFiles.length}</dd>
+      </div>
+      <div>
+        <dt>Warnings</dt>
+        <dd>{result.context.warnings.length}</dd>
+      </div>
+      <div>
+        <dt>Timestamp</dt>
+        <dd>{runCompletedAt ? new Date(runCompletedAt).toLocaleString() : "Just now"}</dd>
+      </div>
+    </dl>
   );
 }
 
@@ -2867,6 +3151,58 @@ function validateRunForm(settings: PublicSettings, kitPath: string, userTask: st
   }
 
   return errors;
+}
+
+function formatRunResultMarkdown(
+  result: RunAgentKitResult,
+  runCompletedAt: string | null,
+  kitPath: string,
+  contextMode: AgentKitContextMode,
+  validationProfile: ValidationProfile,
+  validateBeforeRun: boolean,
+) {
+  const timestamp = runCompletedAt ?? new Date().toISOString();
+  const warnings =
+    result.context.warnings.length > 0
+      ? result.context.warnings.map((warning) => `- ${warning}`).join("\n")
+      : "- None";
+  const skills =
+    result.context.includedSkills.length > 0
+      ? result.context.includedSkills.map((skill) => `- ${skill}`).join("\n")
+      : "- None";
+  const files =
+    result.context.includedFiles.length > 0
+      ? result.context.includedFiles.map((file) => `- ${file}`).join("\n")
+      : "- None";
+
+  return `# AgentKitForge Response
+
+## Metadata
+
+- Kit: ${result.kitName || kitPath || "Selected kit"}
+- Kit path: ${kitPath || "Unknown"}
+- Model: ${result.model}
+- Context mode: ${contextMode}
+- Validation: ${validateBeforeRun ? validationProfile : "Skipped"}
+- Timestamp: ${timestamp}
+- Approximate context length: ${result.context.approximateContextLength} characters
+
+## Response
+
+${result.response.trim()}
+
+## Included Skills
+
+${skills}
+
+## Included Files
+
+${files}
+
+## Warnings
+
+${warnings}
+`;
 }
 
 function SettingsScreen({

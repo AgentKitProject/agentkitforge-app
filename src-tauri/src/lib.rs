@@ -194,6 +194,25 @@ struct TestOpenAIConnectionResult {
     message: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentKitStarterHint {
+    source_file: String,
+    excerpt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveMarkdownFileInput {
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveMarkdownFileResult {
+    file_path: String,
+}
+
 struct KitMetadata {
     id: String,
     name: String,
@@ -289,6 +308,17 @@ fn select_onefile_output_path() -> Result<Option<String>, String> {
         .set_title("Export Agent Kit Markdown")
         .add_filter("Markdown", &["md"])
         .set_file_name("agent-kit.md")
+        .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_forge_response_output_path() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Save Forge Response")
+        .add_filter("Markdown", &["md"])
+        .set_file_name("forge-response.md")
         .save_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
@@ -610,6 +640,41 @@ fn save_agent_kit_draft_json(
     Ok(SaveAgentKitDraftJsonResult {
         file_path: output_path.to_string_lossy().into_owned(),
     })
+}
+
+#[tauri::command]
+fn save_markdown_file(
+    input: SaveMarkdownFileInput,
+    output_path: String,
+) -> Result<SaveMarkdownFileResult, String> {
+    let output_path = resolve_markdown_file_output_path(&output_path, "Markdown output")?;
+    fs::write(&output_path, format!("{}\n", input.content.trim_end()))
+        .map_err(|error| format!("Unable to save Markdown file: {error}"))?;
+
+    Ok(SaveMarkdownFileResult {
+        file_path: output_path.to_string_lossy().into_owned(),
+    })
+}
+
+#[tauri::command]
+fn get_agent_kit_starter_hint(root_path: String) -> Result<Option<AgentKitStarterHint>, String> {
+    let root_path = canonicalize_directory(&root_path)?;
+
+    for file_name in ["START_HERE.md", "README.md"] {
+        let candidate = root_path.join(file_name);
+        if candidate.is_file() {
+            let content = fs::read_to_string(&candidate)
+                .map_err(|error| format!("Unable to read {file_name}: {error}"))?;
+            if let Some(excerpt) = starter_excerpt(&content) {
+                return Ok(Some(AgentKitStarterHint {
+                    source_file: file_name.to_string(),
+                    excerpt,
+                }));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 #[tauri::command]
@@ -1197,6 +1262,63 @@ fn resolve_json_output_path(output_path: &str) -> Result<PathBuf, String> {
     Ok(canonical_parent.join(file_name))
 }
 
+fn resolve_markdown_file_output_path(output_path: &str, label: &str) -> Result<PathBuf, String> {
+    let trimmed = output_path.trim();
+    if trimmed.is_empty() {
+        return Err(format!("Select a {label} path before saving."));
+    }
+
+    let mut file_path = PathBuf::from(trimmed);
+    if file_path.extension().is_none() {
+        file_path.set_extension("md");
+    }
+
+    let parent = file_path
+        .parent()
+        .ok_or_else(|| format!("{label} path must have a parent folder."))?;
+
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|error| format!("Unable to access {label} folder: {error}"))?;
+
+    if !canonical_parent.is_dir() {
+        return Err(format!("{label} parent path is not a folder."));
+    }
+
+    let file_name = file_path
+        .file_name()
+        .ok_or_else(|| format!("{label} path must include a file name."))?;
+
+    Ok(canonical_parent.join(file_name))
+}
+
+fn starter_excerpt(content: &str) -> Option<String> {
+    let mut excerpt = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with("---")
+                && !line.starts_with("<!--")
+        })
+        .take(4)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if excerpt.is_empty() {
+        return None;
+    }
+
+    const MAX_EXCERPT_LENGTH: usize = 360;
+    if excerpt.len() > MAX_EXCERPT_LENGTH {
+        excerpt.truncate(MAX_EXCERPT_LENGTH);
+        excerpt.push_str("...");
+    }
+
+    Some(excerpt)
+}
+
 fn clean_optional(value: Option<&str>) -> Option<String> {
     value.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string)
 }
@@ -1598,6 +1720,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             select_agent_kit_folder,
             select_onefile_output_path,
+            select_forge_response_output_path,
             select_json_file,
             select_json_output_path,
             select_agent_kit_package_file,
@@ -1609,6 +1732,8 @@ pub fn run() {
             render_generated_agent_kit_draft,
             generate_agent_kit_draft_with_openai,
             save_agent_kit_draft_json,
+            save_markdown_file,
+            get_agent_kit_starter_hint,
             get_app_settings,
             save_openai_api_key,
             clear_openai_api_key,

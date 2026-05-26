@@ -149,13 +149,18 @@ To run a kit inside Forge:
 
 1. Open the Use section.
 2. Select a local Agent Kit folder.
-3. Enter the task.
-4. Optionally add extra context.
-5. Confirm the model and output token limit.
-6. Click **Run**.
-7. Review the response before relying on it.
+3. Enter the task you want the kit to perform.
+4. Optionally add extra context such as assumptions, notes, or output constraints.
+5. Confirm the model, context options, validation profile, and output token limit.
+6. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
+7. Click **Run with OpenAI**.
+8. Review the response before relying on it.
 
-For v0.1, Forge includes `AGENTKIT.md`, every `skills/*/SKILL.md` file, and supported files from `policies/` and `templates/` in the OpenAI prompt. Advanced skill routing and file uploads are not implemented yet.
+If the kit has `START_HERE.md` or `README.md`, the Use screen shows a short local hint from that file. This does not call OpenAI.
+
+With **Validate before running** enabled, AgentKitForge validates the selected kit with the chosen validation profile before making the OpenAI request. If validation fails, the run is blocked and the validation issues are shown. Turn the checkbox off only when you deliberately want to test or debug an invalid kit.
+
+After a response is generated, you can copy it, save it as a Markdown file, or clear it from the screen. Saved Markdown includes the response plus run metadata for review.
 
 ### Context Builder Options
 
@@ -176,6 +181,8 @@ Include options:
 - References: off by default to avoid oversized context.
 
 After a run, expand **Context details** to see included files, included skills, warnings, and approximate context length.
+
+The response metadata panel shows the kit name when available, model used, context mode, validation profile, included skills, included file count, warnings count, and timestamp. Context builder warnings are shown in Context details; warnings may indicate fallback behavior such as triggered mode including all skills when no trigger matched.
 
 ## App Sections
 

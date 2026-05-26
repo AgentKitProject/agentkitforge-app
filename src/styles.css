@@ -475,6 +475,12 @@ textarea {
   margin: 0;
 }
 
+.aligned-checkbox {
+  align-self: end;
+  min-height: 42px;
+  padding-bottom: 10px;
+}
+
 .checkbox-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -682,7 +688,15 @@ textarea {
   margin-top: 14px;
 }
 
+.run-meta {
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
 .starter-prompt-panel,
+.starter-hint-panel,
 .usage-steps {
   padding: 14px;
   background: #f8fafc;
@@ -708,6 +722,26 @@ textarea {
   margin: 12px 0 0;
   color: #354155;
   line-height: 1.55;
+}
+
+.starter-hint-panel {
+  margin: 2px 0 6px;
+}
+
+.starter-hint-panel strong {
+  color: #253047;
+  font-size: 0.88rem;
+}
+
+.starter-hint-panel p {
+  margin: 8px 0 0;
+  color: #596579;
+  line-height: 1.45;
+}
+
+.compact-state {
+  margin-top: 0;
+  font-size: 0.86rem;
 }
 
 .compact-button {
