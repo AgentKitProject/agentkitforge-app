@@ -180,6 +180,20 @@ struct ExportAgentKitToCodexResult {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestOpenAIConnectionInput {
+    model: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TestOpenAIConnectionResult {
+    ok: bool,
+    model: String,
+    message: String,
+}
+
 struct KitMetadata {
     id: String,
     name: String,
@@ -847,6 +861,67 @@ fn save_default_model<R: Runtime>(
     model: String,
 ) -> Result<settings::PublicSettings, String> {
     settings::save_default_model(&app, model)
+}
+
+#[tauri::command]
+fn save_app_preferences<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: settings::AppPreferencesInput,
+) -> Result<settings::PublicSettings, String> {
+    settings::save_app_preferences(&app, input)
+}
+
+#[tauri::command]
+async fn test_openai_connection<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: TestOpenAIConnectionInput,
+) -> Result<TestOpenAIConnectionResult, String> {
+    let api_key = settings::get_openai_api_key(&app)?;
+    let public_settings = settings::get_public_settings(&app)?;
+    let model = input
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&public_settings.default_model)
+        .to_string();
+
+    let response = reqwest::Client::new()
+        .post("https://api.openai.com/v1/responses")
+        .bearer_auth(api_key)
+        .json(&serde_json::json!({
+            "model": model,
+            "input": "Reply with OK.",
+            "max_output_tokens": 16
+        }))
+        .send()
+        .await
+        .map_err(|error| format!("Unable to reach OpenAI: {error}"))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Unable to read OpenAI response: {error}"))?;
+
+    if !status.is_success() {
+        let message = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .and_then(|message| message.as_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "OpenAI request failed.".to_string());
+        return Err(format!("OpenAI connection test failed ({status}): {message}"));
+    }
+
+    Ok(TestOpenAIConnectionResult {
+        ok: true,
+        model,
+        message: "OpenAI connection succeeded.".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -1538,6 +1613,8 @@ pub fn run() {
             save_openai_api_key,
             clear_openai_api_key,
             save_default_model,
+            save_app_preferences,
+            test_openai_connection,
             run_agent_kit_with_openai,
             open_folder,
             add_kit_to_library,

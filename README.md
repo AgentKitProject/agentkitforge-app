@@ -202,6 +202,21 @@ AgentKitForge exports the Agent Kit's skills into a Codex-compatible skills dire
 
 AgentKitForge writes files only. It does not launch Codex, restart Codex, or verify that the Codex runtime loaded the exported skills.
 
+## Settings
+
+Settings controls local app defaults and OpenAI access:
+
+- OpenAI API key: save, update, clear, and test the saved key.
+- Default OpenAI model: used by Build with OpenAI and Use inside Forge unless changed on the screen.
+- Default output folder: pre-fills build, render, export, and package destinations where applicable.
+- Preferred validation profile: pre-fills validation-related workflows.
+- Preferred context mode: `all` or `triggered` for Use inside Forge.
+- Context include defaults: policies, templates, workflows, and references.
+
+Use **Test OpenAI connection** after saving an API key. It sends a very small request with the selected/default model and reports success or a readable failure. The key is not printed by the app.
+
+Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. For v0.1 the OpenAI API key is stored in that local settings file, not in an OS keychain. Do not share local app data or commit generated settings files.
+
 ## My Kits Library
 
 My Kits is a local-only library of Agent Kit folders on this machine. It stores metadata and paths so you can quickly reopen, validate, use, or package kits without moving or copying the kit folders.

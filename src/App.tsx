@@ -135,6 +135,14 @@ type CodexExportResult = {
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
+  defaultOutputFolder: string;
+  preferredValidationProfile: ValidationProfile;
+  preferredContextMode: AgentKitContextMode;
+  includePolicies: boolean;
+  includeTemplates: boolean;
+  includeWorkflows: boolean;
+  includeReferences: boolean;
+  settingsPath: string;
 };
 
 type RunAgentKitResult = {
@@ -182,6 +190,14 @@ export function App() {
   const [settings, setSettings] = useState<PublicSettings>({
     hasOpenaiApiKey: false,
     defaultModel: defaultRuntimeModel,
+    defaultOutputFolder: "",
+    preferredValidationProfile: "local-valid",
+    preferredContextMode: "triggered",
+    includePolicies: true,
+    includeTemplates: true,
+    includeWorkflows: true,
+    includeReferences: false,
+    settingsPath: "",
   });
   const [appState, setAppState] = useState<AppState>({
     currentKitPath: "",
@@ -199,9 +215,22 @@ export function App() {
     invoke<PublicSettings>("get_app_settings")
       .then((loadedSettings) => {
         setSettings(loadedSettings);
+        updateAppState("defaultOutputFolder", loadedSettings.defaultOutputFolder);
+        updateAppState("preferredValidationProfile", loadedSettings.preferredValidationProfile);
       })
       .catch(() => {
-        setSettings({ hasOpenaiApiKey: false, defaultModel: defaultRuntimeModel });
+        setSettings({
+          hasOpenaiApiKey: false,
+          defaultModel: defaultRuntimeModel,
+          defaultOutputFolder: "",
+          preferredValidationProfile: "local-valid",
+          preferredContextMode: "triggered",
+          includePolicies: true,
+          includeTemplates: true,
+          includeWorkflows: true,
+          includeReferences: false,
+          settingsPath: "",
+        });
       });
   }, []);
 
@@ -314,6 +343,7 @@ export function App() {
             <PackageExportScreen
               currentKitPath={appState.currentKitPath}
               onKitPackaged={(path) => addKitToLibrary(path, "manual")}
+              settings={settings}
             />
           )}
           {activeSection === "install-targets" && (
@@ -818,7 +848,7 @@ function BuildScreen({
   settings: PublicSettings;
 }) {
   const [form, setForm] = useState<CreateAgentKitInput>({
-    outputFolder: "",
+    outputFolder: settings.defaultOutputFolder,
     id: "",
     name: "",
     description: "",
@@ -834,7 +864,7 @@ function BuildScreen({
   const [isCreating, setIsCreating] = useState(false);
   const [draftForm, setDraftForm] = useState<RenderAgentKitDraftInput>({
     draftFilePath: "",
-    outputFolder: "",
+    outputFolder: settings.defaultOutputFolder,
     force: false,
   });
   const [draftResult, setDraftResult] = useState<RenderAgentKitDraftResult | null>(null);
@@ -862,7 +892,9 @@ function BuildScreen({
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
   const [draftCopyState, setDraftCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [draftSavePath, setDraftSavePath] = useState<string | null>(null);
-  const [generatedRenderOutputFolder, setGeneratedRenderOutputFolder] = useState("");
+  const [generatedRenderOutputFolder, setGeneratedRenderOutputFolder] = useState(
+    settings.defaultOutputFolder,
+  );
   const [generatedRenderForce, setGeneratedRenderForce] = useState(false);
   const [generatedRenderResult, setGeneratedRenderResult] =
     useState<RenderAgentKitDraftResult | null>(null);
@@ -873,6 +905,12 @@ function BuildScreen({
   useEffect(() => {
     setAiForm((current) => ({ ...current, model: settings.defaultModel || defaultRuntimeModel }));
   }, [settings.defaultModel]);
+
+  useEffect(() => {
+    setForm((current) => ({ ...current, outputFolder: current.outputFolder || settings.defaultOutputFolder }));
+    setDraftForm((current) => ({ ...current, outputFolder: current.outputFolder || settings.defaultOutputFolder }));
+    setGeneratedRenderOutputFolder((current) => current || settings.defaultOutputFolder);
+  }, [settings.defaultOutputFolder]);
 
   function updateForm<Key extends keyof CreateAgentKitInput>(
     key: Key,
@@ -1538,12 +1576,12 @@ function UseScreen({
   const [additionalContext, setAdditionalContext] = useState("");
   const [model, setModel] = useState(settings.defaultModel || defaultRuntimeModel);
   const [maxOutputLength, setMaxOutputLength] = useState("1800");
-  const [contextMode, setContextMode] = useState<AgentKitContextMode>("triggered");
+  const [contextMode, setContextMode] = useState<AgentKitContextMode>(settings.preferredContextMode);
   const [contextTarget, setContextTarget] = useState<AgentKitContextTarget>("openai");
-  const [includePolicies, setIncludePolicies] = useState(true);
-  const [includeTemplates, setIncludeTemplates] = useState(true);
-  const [includeWorkflows, setIncludeWorkflows] = useState(true);
-  const [includeReferences, setIncludeReferences] = useState(false);
+  const [includePolicies, setIncludePolicies] = useState(settings.includePolicies);
+  const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
+  const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
+  const [includeReferences, setIncludeReferences] = useState(settings.includeReferences);
   const [maxSkills, setMaxSkills] = useState("");
   const [runResult, setRunResult] = useState<RunAgentKitResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -1553,7 +1591,7 @@ function UseScreen({
     userTask?: string;
   }>({});
   const [isRunning, setIsRunning] = useState(false);
-  const [outputPath, setOutputPath] = useState("");
+  const [outputPath, setOutputPath] = useState(settings.defaultOutputFolder);
   const [result, setResult] = useState<ExportAgentKitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; outputPath?: string }>({});
@@ -1569,7 +1607,13 @@ function UseScreen({
 
   useEffect(() => {
     setModel(settings.defaultModel || defaultRuntimeModel);
-  }, [settings.defaultModel]);
+    setContextMode(settings.preferredContextMode);
+    setIncludePolicies(settings.includePolicies);
+    setIncludeTemplates(settings.includeTemplates);
+    setIncludeWorkflows(settings.includeWorkflows);
+    setIncludeReferences(settings.includeReferences);
+    setOutputPath((current) => current || settings.defaultOutputFolder);
+  }, [settings]);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
@@ -1986,13 +2030,17 @@ function UseScreen({
 function PackageExportScreen({
   currentKitPath,
   onKitPackaged,
+  settings,
 }: {
   currentKitPath: string;
   onKitPackaged: (path: string) => void;
+  settings: PublicSettings;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
-  const [outputFolder, setOutputFolder] = useState("");
-  const [validationProfile, setValidationProfile] = useState<ValidationProfile>("local-valid");
+  const [outputFolder, setOutputFolder] = useState(settings.defaultOutputFolder);
+  const [validationProfile, setValidationProfile] = useState<ValidationProfile>(
+    settings.preferredValidationProfile,
+  );
   const [validateBeforePackaging, setValidateBeforePackaging] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; outputFolder?: string }>({});
   const [error, setError] = useState<string | null>(null);
@@ -2007,6 +2055,11 @@ function PackageExportScreen({
   useEffect(() => {
     setKitPath(currentKitPath);
   }, [currentKitPath]);
+
+  useEffect(() => {
+    setOutputFolder((current) => current || settings.defaultOutputFolder);
+    setValidationProfile(settings.preferredValidationProfile);
+  }, [settings.defaultOutputFolder, settings.preferredValidationProfile]);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
@@ -2832,11 +2885,31 @@ function SettingsScreen({
   const [isSavingKey, setIsSavingKey] = useState(false);
   const [isClearingKey, setIsClearingKey] = useState(false);
   const [defaultModel, setDefaultModel] = useState(settings.defaultModel);
-  const [isSavingModel, setIsSavingModel] = useState(false);
+  const [defaultOutputFolder, setDefaultOutputFolder] = useState(settings.defaultOutputFolder);
+  const [preferredValidationProfile, setPreferredValidationProfile] = useState<ValidationProfile>(
+    settings.preferredValidationProfile,
+  );
+  const [preferredContextMode, setPreferredContextMode] = useState<AgentKitContextMode>(
+    settings.preferredContextMode,
+  );
+  const [includePolicies, setIncludePolicies] = useState(settings.includePolicies);
+  const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
+  const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
+  const [includeReferences, setIncludeReferences] = useState(settings.includeReferences);
+  const [isSavingPreferences, setIsSavingPreferences] = useState(false);
+  const [isSelectingOutputFolder, setIsSelectingOutputFolder] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
 
   useEffect(() => {
     setDefaultModel(settings.defaultModel);
-  }, [settings.defaultModel]);
+    setDefaultOutputFolder(settings.defaultOutputFolder);
+    setPreferredValidationProfile(settings.preferredValidationProfile);
+    setPreferredContextMode(settings.preferredContextMode);
+    setIncludePolicies(settings.includePolicies);
+    setIncludeTemplates(settings.includeTemplates);
+    setIncludeWorkflows(settings.includeWorkflows);
+    setIncludeReferences(settings.includeReferences);
+  }, [settings]);
 
   async function saveApiKey() {
     setIsSavingKey(true);
@@ -2874,21 +2947,66 @@ function SettingsScreen({
     }
   }
 
-  async function saveModel() {
-    setIsSavingModel(true);
+  async function savePreferences() {
+    setIsSavingPreferences(true);
     setSettingsError(null);
     setSettingsMessage(null);
 
     try {
-      const updatedSettings = await invoke<PublicSettings>("save_default_model", {
-        model: defaultModel,
+      const updatedSettings = await invoke<PublicSettings>("save_app_preferences", {
+        input: {
+          defaultModel,
+          defaultOutputFolder,
+          preferredValidationProfile,
+          preferredContextMode,
+          includePolicies,
+          includeTemplates,
+          includeWorkflows,
+          includeReferences,
+        },
       });
       onSettingsChange(updatedSettings);
-      setSettingsMessage("Default model saved.");
+      onUpdate("defaultOutputFolder", updatedSettings.defaultOutputFolder);
+      onUpdate("preferredValidationProfile", updatedSettings.preferredValidationProfile);
+      setSettingsMessage("Preferences saved.");
     } catch (caughtError) {
       setSettingsError(errorToMessage(caughtError));
     } finally {
-      setIsSavingModel(false);
+      setIsSavingPreferences(false);
+    }
+  }
+
+  async function selectDefaultOutputFolder() {
+    setIsSelectingOutputFolder(true);
+    setSettingsError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setDefaultOutputFolder(selectedPath);
+      }
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingOutputFolder(false);
+    }
+  }
+
+  async function testOpenAIConnection() {
+    setIsTestingConnection(true);
+    setSettingsError(null);
+    setSettingsMessage(null);
+
+    try {
+      const result = await invoke<{ ok: boolean; model: string; message: string }>(
+        "test_openai_connection",
+        { input: { model: defaultModel } },
+      );
+      setSettingsMessage(`${result.message} Model: ${result.model}.`);
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsTestingConnection(false);
     }
   }
 
@@ -2929,6 +3047,14 @@ function SettingsScreen({
           {isClearingKey ? "Clearing" : "Clear API key"}
         </button>
       </div>
+      <button
+        className="secondary-button settings-inline-button"
+        disabled={isTestingConnection || !settings.hasOpenaiApiKey}
+        onClick={testOpenAIConnection}
+        type="button"
+      >
+        {isTestingConnection ? "Testing" : "Test OpenAI connection"}
+      </button>
 
       <label htmlFor="default-runtime-model">Default OpenAI model</label>
       <input
@@ -2936,18 +3062,10 @@ function SettingsScreen({
         onChange={(event) => setDefaultModel(event.target.value)}
         value={defaultModel}
       />
-      <button
-        className="secondary-button settings-inline-button"
-        disabled={isSavingModel}
-        onClick={saveModel}
-        type="button"
-      >
-        {isSavingModel ? "Saving" : "Save model"}
-      </button>
 
       <div className="inline-warning">
-        The API key is stored in a local settings file on this machine. Do not commit or share local
-        app data.
+        Settings are stored as local app data at {settings.settingsPath || "the app-local settings file"}.
+        The OpenAI API key is saved there for v0.1; it is not stored in an OS keychain yet.
       </div>
 
       {settingsMessage && <div className="copy-state">{settingsMessage}</div>}
@@ -2958,20 +3076,29 @@ function SettingsScreen({
       )}
 
       <label htmlFor="default-output-folder">Default output folder</label>
-      <input
-        id="default-output-folder"
-        onChange={(event) => onUpdate("defaultOutputFolder", event.target.value)}
-        placeholder="C:\\kits\\output"
-        value={appState.defaultOutputFolder}
-      />
+      <div className="path-picker">
+        <input
+          id="default-output-folder"
+          onChange={(event) => setDefaultOutputFolder(event.target.value)}
+          placeholder="C:\\kits\\output"
+          value={defaultOutputFolder}
+        />
+        <button
+          className="icon-button"
+          disabled={isSelectingOutputFolder}
+          onClick={selectDefaultOutputFolder}
+          title="Select output folder"
+          type="button"
+        >
+          <FolderOpen size={18} />
+        </button>
+      </div>
 
       <label htmlFor="preferred-validation-profile">Preferred validation profile</label>
       <select
         id="preferred-validation-profile"
-        onChange={(event) =>
-          onUpdate("preferredValidationProfile", event.target.value as ValidationProfile)
-        }
-        value={appState.preferredValidationProfile}
+        onChange={(event) => setPreferredValidationProfile(event.target.value as ValidationProfile)}
+        value={preferredValidationProfile}
       >
         {validationProfiles.map((validationProfile) => (
           <option key={validationProfile} value={validationProfile}>
@@ -2979,6 +3106,67 @@ function SettingsScreen({
           </option>
         ))}
       </select>
+
+      <label htmlFor="preferred-context-mode">Preferred context mode</label>
+      <select
+        id="preferred-context-mode"
+        onChange={(event) => setPreferredContextMode(event.target.value as AgentKitContextMode)}
+        value={preferredContextMode}
+      >
+        {contextModes.map((mode) => (
+          <option key={mode} value={mode}>
+            {mode}
+          </option>
+        ))}
+      </select>
+
+      <div className="checkbox-grid">
+        <label className="checkbox-row" htmlFor="settings-include-policies">
+          <input
+            checked={includePolicies}
+            id="settings-include-policies"
+            onChange={(event) => setIncludePolicies(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Include policies</span>
+        </label>
+        <label className="checkbox-row" htmlFor="settings-include-templates">
+          <input
+            checked={includeTemplates}
+            id="settings-include-templates"
+            onChange={(event) => setIncludeTemplates(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Include templates</span>
+        </label>
+        <label className="checkbox-row" htmlFor="settings-include-workflows">
+          <input
+            checked={includeWorkflows}
+            id="settings-include-workflows"
+            onChange={(event) => setIncludeWorkflows(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Include workflows</span>
+        </label>
+        <label className="checkbox-row" htmlFor="settings-include-references">
+          <input
+            checked={includeReferences}
+            id="settings-include-references"
+            onChange={(event) => setIncludeReferences(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Include references</span>
+        </label>
+      </div>
+
+      <button
+        className="primary-button settings-inline-button"
+        disabled={isSavingPreferences}
+        onClick={savePreferences}
+        type="button"
+      >
+        {isSavingPreferences ? "Saving" : "Save preferences"}
+      </button>
     </div>
   );
 }
