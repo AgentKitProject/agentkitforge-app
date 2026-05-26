@@ -79,6 +79,20 @@ struct ExportAgentKitOneFileResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct PackageAgentKitInput {
+    root_path: String,
+    output_folder: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackageAgentKitResult {
+    artifact_path: String,
+    artifact_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RenderAgentKitDraftInput {
     draft_file_path: String,
     output_folder: String,
@@ -304,6 +318,40 @@ fn export_agent_kit_onefile<R: Runtime>(
 }
 
 #[tauri::command]
+fn package_agent_kit<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: PackageAgentKitInput,
+) -> Result<PackageAgentKitResult, String> {
+    let root_path = canonicalize_directory(&input.root_path)?;
+    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let out_file = output_folder.join(format!("{}.agentkit.zip", default_artifact_stem(&root_path)));
+    let bridge_script = resolve_package_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&root_path)
+        .arg(&out_file)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run agentkitforge-core package export: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "agentkitforge-core package export failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse package result: {error}"))
+}
+
+#[tauri::command]
 fn render_agent_kit_draft<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: RenderAgentKitDraftInput,
@@ -373,7 +421,7 @@ fn render_generated_agent_kit_draft<R: Runtime>(
 }
 
 #[tauri::command]
-fn generate_agent_kit_draft_with_openai<R: Runtime>(
+async fn generate_agent_kit_draft_with_openai<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: GenerateAgentKitDraftInput,
 ) -> Result<GenerateAgentKitDraftResult, String> {
@@ -399,13 +447,19 @@ fn generate_agent_kit_draft_with_openai<R: Runtime>(
         "model": model,
     });
 
-    let output = Command::new(node_command)
-        .arg(&bridge_script)
-        .env("AGENTKITFORGE_OPENAI_API_KEY", api_key)
-        .arg(serde_json::to_string(&request).map_err(|error| error.to_string())?)
-        .current_dir(resolve_command_working_directory(&app))
-        .output()
-        .map_err(|error| format!("Unable to run OpenAI draft generation: {error}"))?;
+    let request_json = serde_json::to_string(&request).map_err(|error| error.to_string())?;
+    let working_directory = resolve_command_working_directory(&app);
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        Command::new(node_command)
+            .arg(&bridge_script)
+            .env("AGENTKITFORGE_OPENAI_API_KEY", api_key)
+            .arg(request_json)
+            .current_dir(working_directory)
+            .output()
+    })
+    .await
+    .map_err(|error| format!("OpenAI draft generation task failed: {error}"))?
+    .map_err(|error| format!("Unable to run OpenAI draft generation: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -436,6 +490,37 @@ fn save_agent_kit_draft_json(
     Ok(SaveAgentKitDraftJsonResult {
         file_path: output_path.to_string_lossy().into_owned(),
     })
+}
+
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let folder = canonicalize_directory(&path)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer")
+            .arg(folder)
+            .spawn()
+            .map_err(|error| format!("Unable to open output folder: {error}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(folder)
+            .spawn()
+            .map_err(|error| format!("Unable to open output folder: {error}"))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(folder)
+            .spawn()
+            .map_err(|error| format!("Unable to open output folder: {error}"))?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -559,6 +644,10 @@ fn resolve_create_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
 
 fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "export-agent-kit-onefile.mjs")
+}
+
+fn resolve_package_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "package-agent-kit.mjs")
 }
 
 fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -746,6 +835,15 @@ fn default_markdown_file_name(root_path: &Path) -> String {
     format!("{stem}.md")
 }
 
+fn default_artifact_stem(root_path: &Path) -> String {
+    root_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("agent-kit")
+        .to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -757,6 +855,7 @@ pub fn run() {
             validate_agent_kit,
             create_agent_kit_from_template,
             export_agent_kit_onefile,
+            package_agent_kit,
             render_agent_kit_draft,
             render_generated_agent_kit_draft,
             generate_agent_kit_draft_with_openai,
@@ -765,7 +864,8 @@ pub fn run() {
             save_openai_api_key,
             clear_openai_api_key,
             save_default_model,
-            run_agent_kit_with_openai
+            run_agent_kit_with_openai,
+            open_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

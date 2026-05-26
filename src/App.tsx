@@ -2,6 +2,7 @@ import {
   Box,
   CheckCircle2,
   FileArchive,
+  FolderOutput,
   FolderOpen,
   Hammer,
   KeyRound,
@@ -15,6 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
+type ExtendedSectionId = SectionId | "package-export";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
@@ -87,6 +89,16 @@ type ExportAgentKitResult = {
   filePath: string;
 };
 
+type PackageAgentKitResult = {
+  artifactPath: string;
+  artifactType: string;
+};
+
+type ArtifactResult = {
+  artifactPath: string;
+  artifactType: ".agentkit.zip" | ".onefile.md";
+};
+
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
@@ -98,7 +110,7 @@ type RunAgentKitResult = {
 };
 
 type NavItem = {
-  id: SectionId;
+  id: ExtendedSectionId;
   label: string;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
 };
@@ -114,11 +126,12 @@ const navItems: NavItem[] = [
   { id: "build", label: "Build", icon: Hammer },
   { id: "use", label: "Use", icon: PlayCircle },
   { id: "validate", label: "Validate", icon: CheckCircle2 },
+  { id: "package-export" as ExtendedSectionId, label: "Package / Export", icon: FolderOutput },
   { id: "settings", label: "Settings", icon: Settings },
 ];
 
 export function App() {
-  const [activeSection, setActiveSection] = useState<SectionId>("my-kits");
+  const [activeSection, setActiveSection] = useState<ExtendedSectionId>("my-kits");
   const [settings, setSettings] = useState<PublicSettings>({
     hasOpenaiApiKey: false,
     defaultModel: defaultRuntimeModel,
@@ -225,6 +238,7 @@ export function App() {
               onProfileChange={(value) => updateAppState("preferredValidationProfile", value)}
             />
           )}
+          {activeSection === "package-export" && <PackageExportScreen currentKitPath={appState.currentKitPath} />}
           {activeSection === "settings" && (
             <SettingsScreen
               appState={appState}
@@ -1331,6 +1345,337 @@ function UseScreen({
   );
 }
 
+function PackageExportScreen({ currentKitPath }: { currentKitPath: string }) {
+  const [kitPath, setKitPath] = useState(currentKitPath);
+  const [outputFolder, setOutputFolder] = useState("");
+  const [validationProfile, setValidationProfile] = useState<ValidationProfile>("local-valid");
+  const [validateBeforePackaging, setValidateBeforePackaging] = useState(true);
+  const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; outputFolder?: string }>({});
+  const [error, setError] = useState<string | null>(null);
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
+  const [artifacts, setArtifacts] = useState<ArtifactResult[]>([]);
+  const [isSelectingKit, setIsSelectingKit] = useState(false);
+  const [isSelectingOutput, setIsSelectingOutput] = useState(false);
+  const [isPackaging, setIsPackaging] = useState(false);
+  const [isExportingOneFile, setIsExportingOneFile] = useState(false);
+  const [copyState, setCopyState] = useState<string | null>(null);
+
+  useEffect(() => {
+    setKitPath(currentKitPath);
+  }, [currentKitPath]);
+
+  async function selectKitFolder() {
+    setIsSelectingKit(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setKitPath(selectedPath);
+        setValidationReport(null);
+        setFieldErrors((current) => ({ ...current, kitPath: undefined }));
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingKit(false);
+    }
+  }
+
+  async function selectOutputFolder() {
+    setIsSelectingOutput(true);
+    setError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setOutputFolder(selectedPath);
+        setFieldErrors((current) => ({ ...current, outputFolder: undefined }));
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingOutput(false);
+    }
+  }
+
+  async function validateForPackaging() {
+    const validationReport = await invoke<ValidationReport>("validate_agent_kit", {
+      rootPath: kitPath,
+      profile: validationProfile,
+    });
+    setValidationReport(validationReport);
+
+    if (!validationReport.valid) {
+      throw new Error(
+        "Validation failed. Fix the reported issues or disable validation before packaging.",
+      );
+    }
+  }
+
+  async function packageZip() {
+    const validationErrors = validatePackageExportForm(kitPath, outputFolder);
+    setFieldErrors(validationErrors);
+    setError(null);
+    setCopyState(null);
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsPackaging(true);
+
+    try {
+      if (validateBeforePackaging) {
+        await validateForPackaging();
+      } else {
+        setValidationReport(null);
+      }
+
+      const result = await invoke<PackageAgentKitResult>("package_agent_kit", {
+        input: { rootPath: kitPath, outputFolder },
+      });
+      setArtifacts((current) => [
+        { artifactPath: result.artifactPath, artifactType: ".agentkit.zip" },
+        ...current,
+      ]);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsPackaging(false);
+    }
+  }
+
+  async function exportOneFile() {
+    const validationErrors = validatePackageExportForm(kitPath, outputFolder);
+    setFieldErrors(validationErrors);
+    setError(null);
+    setCopyState(null);
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsExportingOneFile(true);
+
+    try {
+      const result = await invoke<ExportAgentKitResult>("export_agent_kit_onefile", {
+        input: { rootPath: kitPath, outputPath: outputFolder },
+      });
+      setArtifacts((current) => [
+        { artifactPath: result.filePath, artifactType: ".onefile.md" },
+        ...current,
+      ]);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsExportingOneFile(false);
+    }
+  }
+
+  async function openOutputFolder() {
+    if (outputFolder.trim() === "") {
+      setError("Output folder is required.");
+      return;
+    }
+
+    try {
+      await invoke("open_folder", { path: outputFolder });
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function copyArtifactPath(artifactPath: string) {
+    try {
+      await navigator.clipboard.writeText(artifactPath);
+      setCopyState(artifactPath);
+    } catch {
+      setError("Clipboard access failed. Select and copy the artifact path.");
+    }
+  }
+
+  return (
+    <div className="build-layout">
+      <div className="form-panel">
+        <h2>Package / Export</h2>
+
+        <label htmlFor="package-kit-folder">Agent Kit folder</label>
+        <div className="path-picker">
+          <input
+            id="package-kit-folder"
+            onChange={(event) => {
+              setKitPath(event.target.value);
+              setValidationReport(null);
+            }}
+            placeholder="Choose an Agent Kit"
+            value={kitPath}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelectingKit || isPackaging || isExportingOneFile}
+            onClick={selectKitFolder}
+            title="Select kit folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.kitPath} />
+
+        <label htmlFor="package-output-folder">Output folder</label>
+        <div className="path-picker">
+          <input
+            id="package-output-folder"
+            onChange={(event) => setOutputFolder(event.target.value)}
+            placeholder="C:\\kits\\exports"
+            value={outputFolder}
+          />
+          <button
+            className="icon-button"
+            disabled={isSelectingOutput || isPackaging || isExportingOneFile}
+            onClick={selectOutputFolder}
+            title="Select output folder"
+            type="button"
+          >
+            <FolderOpen size={18} />
+          </button>
+        </div>
+        <FieldError message={fieldErrors.outputFolder} />
+
+        <label className="checkbox-row" htmlFor="validate-before-package">
+          <input
+            checked={validateBeforePackaging}
+            id="validate-before-package"
+            onChange={(event) => setValidateBeforePackaging(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Run validation before packaging</span>
+        </label>
+
+        <label htmlFor="package-validation-profile">Validation profile</label>
+        <select
+          disabled={!validateBeforePackaging}
+          id="package-validation-profile"
+          onChange={(event) => setValidationProfile(event.target.value as ValidationProfile)}
+          value={validationProfile}
+        >
+          {validationProfiles.map((profile) => (
+            <option key={profile} value={profile}>
+              {profile}
+            </option>
+          ))}
+        </select>
+
+        <div className="button-row">
+          <button
+            className="primary-button"
+            disabled={isPackaging}
+            onClick={packageZip}
+            type="button"
+          >
+            <PackageOpen size={18} />
+            {isPackaging ? "Packaging" : "Package .agentkit.zip"}
+          </button>
+          <button
+            className="secondary-button"
+            disabled={isExportingOneFile}
+            onClick={exportOneFile}
+            type="button"
+          >
+            <FileArchive size={18} />
+            {isExportingOneFile ? "Exporting" : "Export .onefile.md"}
+          </button>
+        </div>
+      </div>
+
+      <div className="results-panel">
+        <div className="panel-label">Artifacts</div>
+        <PackageExportResults
+          artifacts={artifacts}
+          copyState={copyState}
+          error={error}
+          isLoading={isPackaging || isExportingOneFile}
+          onCopyArtifactPath={copyArtifactPath}
+          onOpenOutputFolder={openOutputFolder}
+          validationReport={validationReport}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PackageExportResults({
+  artifacts,
+  copyState,
+  error,
+  isLoading,
+  onCopyArtifactPath,
+  onOpenOutputFolder,
+  validationReport,
+}: {
+  artifacts: ArtifactResult[];
+  copyState: string | null;
+  error: string | null;
+  isLoading: boolean;
+  onCopyArtifactPath: (artifactPath: string) => void;
+  onOpenOutputFolder: () => void;
+  validationReport: ValidationReport | null;
+}) {
+  if (isLoading && artifacts.length === 0 && !error) {
+    return <p className="state-copy">Creating artifact...</p>;
+  }
+
+  return (
+    <div className="artifact-results">
+      {error && (
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      )}
+
+      {validationReport && (
+        <div className={`status-banner ${validationReport.valid ? "valid" : "invalid"}`}>
+          <strong>{validationReport.valid ? "Validation passed" : "Validation failed"}</strong>
+          <span>{validationReport.profile}</span>
+        </div>
+      )}
+
+      {artifacts.length === 0 ? (
+        <p className="state-copy">
+          Package an Agent Kit as a distributable zip or export a one-file Markdown bundle.
+        </p>
+      ) : (
+        <>
+          <button className="secondary-button compact-button" onClick={onOpenOutputFolder} type="button">
+            Open output folder
+          </button>
+          <div className="artifact-list">
+            {artifacts.map((artifact) => (
+              <article className="artifact-item" key={`${artifact.artifactType}-${artifact.artifactPath}`}>
+                <div>
+                  <div className="issue-code">{artifact.artifactType}</div>
+                  <p>{artifact.artifactPath}</p>
+                  {copyState === artifact.artifactPath && (
+                    <div className="copy-state">Artifact path copied.</div>
+                  )}
+                </div>
+                <button
+                  className="secondary-button compact-button"
+                  onClick={() => onCopyArtifactPath(artifact.artifactPath)}
+                  type="button"
+                >
+                  Copy path
+                </button>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ForgeRunResults({
   copyState,
   error,
@@ -1473,6 +1818,20 @@ function validateExportForm(kitPath: string, outputPath: string) {
 
   if (outputPath.trim() === "") {
     errors.outputPath = "Output file path or output folder is required.";
+  }
+
+  return errors;
+}
+
+function validatePackageExportForm(kitPath: string, outputFolder: string) {
+  const errors: { kitPath?: string; outputFolder?: string } = {};
+
+  if (kitPath.trim() === "") {
+    errors.kitPath = "Kit folder is required.";
+  }
+
+  if (outputFolder.trim() === "") {
+    errors.outputFolder = "Output folder is required.";
   }
 
   return errors;

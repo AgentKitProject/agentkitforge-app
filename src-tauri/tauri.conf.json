@@ -33,7 +33,8 @@
       "backend/export-agent-kit-onefile.mjs",
       "backend/render-agent-kit-draft.mjs",
       "backend/generate-agent-kit-draft.mjs",
-      "backend/render-generated-agent-kit-draft.mjs"
+      "backend/render-generated-agent-kit-draft.mjs",
+      "backend/package-agent-kit.mjs"
     ]
   }
 }

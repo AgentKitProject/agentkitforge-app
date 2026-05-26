@@ -470,6 +470,34 @@ textarea {
   margin-top: 14px;
 }
 
+.artifact-results {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 12px;
+}
+
+.artifact-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
+.artifact-item p {
+  overflow-wrap: anywhere;
+  margin: 4px 0 0;
+  color: #354155;
+}
+
 .json-panel {
   overflow: auto;
   max-height: 420px;

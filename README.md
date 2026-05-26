@@ -126,6 +126,19 @@ Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web
 
 The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill and reference sections.
 
+## Package / Export Artifacts
+
+Open **Package / Export** when a kit is ready to distribute or hand off.
+
+Artifact types:
+
+- `.agentkit.zip`: full portable package containing the Agent Kit folder contents. Use this for distribution, archival, or later install/import workflows.
+- `.onefile.md`: upload-friendly Markdown bundle containing the main instructions and supported kit content. Use this with ChatGPT, Claude, or another assistant that accepts file uploads.
+
+The screen can run validation before creating the `.agentkit.zip`. If validation is enabled and the selected profile fails, packaging is blocked until the kit is fixed or validation is explicitly disabled. One-file Markdown export does not run validation automatically.
+
+After an artifact is created, use **Open output folder** or **Copy path** to locate or share the generated file.
+
 ## Use Inside Forge With OpenAI
 
 Open Settings and save an OpenAI API key before using the built-in runtime. The key is stored locally in the app settings file on this machine and is not committed by the repo. This is a temporary local-storage approach for early development, so do not share local app data or check generated settings files into source control.
