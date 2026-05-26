@@ -427,6 +427,17 @@ textarea {
   justify-content: space-between;
 }
 
+.settings-grid.two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-grid.two-column > div {
+  display: grid;
+  gap: 8px;
+}
+
 .secret-status {
   display: inline-flex;
   width: fit-content;
@@ -456,6 +467,12 @@ textarea {
   width: 17px;
   min-height: 17px;
   margin: 0;
+}
+
+.checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
 }
 
 .create-result {
@@ -640,6 +657,23 @@ textarea {
   background: #f8fafc;
   border: 1px solid #e0e4ea;
   border-radius: 8px;
+}
+
+.context-details {
+  padding: 12px 14px;
+  background: #ffffff;
+  border: 1px solid #e0e4ea;
+  border-radius: 8px;
+}
+
+.context-details summary {
+  cursor: pointer;
+  color: #253047;
+  font-weight: 700;
+}
+
+.context-details .report-meta {
+  margin-top: 14px;
 }
 
 .starter-prompt-panel,
@@ -882,6 +916,11 @@ textarea {
   }
 
   .kit-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid.two-column,
+  .checkbox-grid {
     grid-template-columns: 1fr;
   }
 

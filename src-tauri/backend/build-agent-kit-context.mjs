@@ -1,25 +1,18 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [, , targetPath, template, id, name, description, force] = process.argv;
+const [, , inputJson] = process.argv;
 
-if (!targetPath || !template || !id || !name || !description) {
-  console.error(
-    "Usage: node create-agent-kit.mjs <targetPath> <template> <id> <name> <description> <force>",
-  );
+if (!inputJson) {
+  console.error("Context builder input is required.");
   process.exit(2);
 }
 
 try {
+  const input = JSON.parse(inputJson);
   const core = await loadCore();
-  const result = await core.createAgentKit(targetPath, {
-    template,
-    id,
-    name,
-    description,
-    force: force === "true",
-  });
-  process.stdout.write(JSON.stringify(result));
+  const context = await core.buildAgentKitContext(input);
+  process.stdout.write(JSON.stringify(context));
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);

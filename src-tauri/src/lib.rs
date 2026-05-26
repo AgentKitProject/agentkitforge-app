@@ -804,7 +804,17 @@ async fn run_agent_kit_with_openai<R: Runtime>(
     input: openai_runtime::RunAgentKitInput,
 ) -> Result<openai_runtime::RunAgentKitResult, String> {
     let api_key = settings::get_openai_api_key(&app)?;
-    openai_runtime::run_agent_kit_with_openai(api_key, input).await
+    let bridge_script = resolve_context_builder_bridge(&app)?;
+    let working_directory = resolve_command_working_directory(&app);
+    let node_command = resolve_node_command()?;
+    openai_runtime::run_agent_kit_with_openai(
+        api_key,
+        input,
+        bridge_script,
+        working_directory,
+        node_command,
+    )
+    .await
 }
 
 fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
@@ -903,6 +913,10 @@ fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<
 
 fn resolve_generate_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "generate-agent-kit-draft.mjs")
+}
+
+fn resolve_context_builder_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "build-agent-kit-context.mjs")
 }
 
 fn resolve_render_generated_draft_bridge<R: Runtime>(

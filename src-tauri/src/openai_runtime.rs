@@ -1,9 +1,6 @@
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{path::Path, process::Command};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -13,6 +10,13 @@ pub struct RunAgentKitInput {
     pub additional_context: Option<String>,
     pub model: Option<String>,
     pub max_output_length: Option<u32>,
+    pub context_mode: Option<AgentKitContextMode>,
+    pub target: Option<AgentKitContextTarget>,
+    pub include_policies: Option<bool>,
+    pub include_templates: Option<bool>,
+    pub include_workflows: Option<bool>,
+    pub include_references: Option<bool>,
+    pub max_skills: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -20,13 +24,64 @@ pub struct RunAgentKitInput {
 pub struct RunAgentKitResult {
     pub response: String,
     pub model: String,
+    pub context: AgentKitContextDetails,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKitContextMode {
+    All,
+    Triggered,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentKitContextTarget {
+    Openai,
+    Chatgpt,
+    Claude,
+    Generic,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentKitContextDetails {
+    pub included_files: Vec<String>,
+    pub included_skills: Vec<String>,
+    pub warnings: Vec<String>,
+    pub approximate_context_length: usize,
 }
 
 #[derive(Debug, Serialize)]
 struct ResponsesRequest {
     model: String,
+    instructions: String,
     input: String,
     max_output_tokens: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextBuilderRequest {
+    kit_path: String,
+    user_task: String,
+    mode: AgentKitContextMode,
+    target: AgentKitContextTarget,
+    include_policies: bool,
+    include_templates: bool,
+    include_workflows: bool,
+    include_references: bool,
+    max_skills: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextBuilderResult {
+    system_context: String,
+    user_context: String,
+    included_files: Vec<String>,
+    included_skills: Vec<String>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,13 +104,14 @@ struct ResponseContent {
 
 const DEFAULT_MODEL: &str = "gpt-5-mini";
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 1800;
-const MAX_CONTEXT_FILE_BYTES: u64 = 256_000;
-
 pub async fn run_agent_kit_with_openai(
     api_key: String,
     input: RunAgentKitInput,
+    bridge_script: std::path::PathBuf,
+    working_directory: std::path::PathBuf,
+    node_command: String,
 ) -> Result<RunAgentKitResult, String> {
-    let kit_path = canonicalize_kit_path(&input.kit_path)?;
+    canonicalize_kit_path(&input.kit_path)?;
     let task = required("Task", &input.user_task)?;
     let model = input
         .model
@@ -69,8 +125,9 @@ pub async fn run_agent_kit_with_openai(
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .clamp(256, 12000);
 
-    let context = load_agent_kit_context(&kit_path)?;
-    let prompt = compose_prompt(&context, &task, input.additional_context.as_deref());
+    let context = build_context(&input, task, bridge_script, working_directory, node_command).await?;
+    let openai_input = compose_openai_input(&context.user_context, input.additional_context.as_deref());
+    let approximate_context_length = context.system_context.len() + openai_input.len();
 
     let client = reqwest::Client::new();
     let response = client
@@ -78,7 +135,8 @@ pub async fn run_agent_kit_with_openai(
         .bearer_auth(api_key)
         .json(&ResponsesRequest {
             model: model.clone(),
-            input: prompt,
+            instructions: context.system_context,
+            input: openai_input,
             max_output_tokens,
         })
         .send()
@@ -102,22 +160,16 @@ pub async fn run_agent_kit_with_openai(
     Ok(RunAgentKitResult {
         response: response_text,
         model,
+        context: AgentKitContextDetails {
+            included_files: context.included_files,
+            included_skills: context.included_skills,
+            warnings: context.warnings,
+            approximate_context_length,
+        },
     })
 }
 
-struct AgentKitContext {
-    agentkit: String,
-    skills: Vec<ContextFile>,
-    policies: Vec<ContextFile>,
-    templates: Vec<ContextFile>,
-}
-
-struct ContextFile {
-    relative_path: String,
-    content: String,
-}
-
-fn canonicalize_kit_path(kit_path: &str) -> Result<PathBuf, String> {
+fn canonicalize_kit_path(kit_path: &str) -> Result<(), String> {
     let trimmed = kit_path.trim();
     if trimmed.is_empty() {
         return Err("Select an Agent Kit folder before running inside Forge.".to_string());
@@ -131,173 +183,68 @@ fn canonicalize_kit_path(kit_path: &str) -> Result<PathBuf, String> {
         return Err("Selected Agent Kit path is not a folder.".to_string());
     }
 
-    Ok(resolved)
-}
-
-fn load_agent_kit_context(root: &Path) -> Result<AgentKitContext, String> {
-    let agentkit_path = root.join("AGENTKIT.md");
-    if !agentkit_path.exists() {
-        return Err("AGENTKIT.md is required to run an Agent Kit inside Forge.".to_string());
-    }
-
-    let agentkit = read_context_file(&agentkit_path)?;
-    let skills = find_skill_files(root)?;
-    if skills.is_empty() {
-        return Err("At least one skills/<skill-id>/SKILL.md file is required.".to_string());
-    }
-
-    Ok(AgentKitContext {
-        agentkit,
-        skills: read_relative_files(root, skills)?,
-        policies: read_optional_context_directory(root, "policies")?,
-        templates: read_optional_context_directory(root, "templates")?,
-    })
-}
-
-fn find_skill_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let skills_root = root.join("skills");
-    if !skills_root.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    for entry in fs::read_dir(&skills_root)
-        .map_err(|error| format!("Unable to read skills folder: {error}"))?
-    {
-        let entry = entry.map_err(|error| format!("Unable to read skills folder entry: {error}"))?;
-        let skill_file = entry.path().join("SKILL.md");
-        if entry.path().is_dir() && skill_file.exists() {
-            files.push(skill_file);
-        }
-    }
-
-    files.sort();
-    Ok(files)
-}
-
-fn read_optional_context_directory(root: &Path, relative_directory: &str) -> Result<Vec<ContextFile>, String> {
-    let directory = root.join(relative_directory);
-    if !directory.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    collect_context_files(&directory, &mut files)?;
-    files.sort();
-    read_relative_files(root, files)
-}
-
-fn collect_context_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(directory)
-        .map_err(|error| format!("Unable to read context folder: {error}"))?
-    {
-        let entry = entry.map_err(|error| format!("Unable to read context folder entry: {error}"))?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_context_files(&path, files)?;
-        } else if is_supported_context_file(&path) {
-            files.push(path);
-        }
-    }
-
     Ok(())
 }
 
-fn read_relative_files(root: &Path, files: Vec<PathBuf>) -> Result<Vec<ContextFile>, String> {
-    files
-        .into_iter()
-        .map(|path| {
-            let relative_path = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            let content = read_context_file(&path)?;
-            Ok(ContextFile {
-                relative_path,
-                content,
-            })
-        })
-        .collect()
-}
-
-fn read_context_file(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|error| format!("Unable to inspect context file: {error}"))?;
-    if metadata.len() > MAX_CONTEXT_FILE_BYTES {
-        return Err(format!(
-            "Context file is too large for v0.1 runtime: {}",
-            path.to_string_lossy()
-        ));
-    }
-
-    fs::read_to_string(path).map_err(|error| {
-        format!(
-            "Unable to read context file {}: {error}",
-            path.to_string_lossy()
-        )
+async fn build_context(
+    input: &RunAgentKitInput,
+    task: String,
+    bridge_script: std::path::PathBuf,
+    working_directory: std::path::PathBuf,
+    node_command: String,
+) -> Result<ContextBuilderResult, String> {
+    let request = ContextBuilderRequest {
+        kit_path: input.kit_path.clone(),
+        user_task: task,
+        mode: input
+            .context_mode
+            .clone()
+            .unwrap_or(AgentKitContextMode::Triggered),
+        target: input
+            .target
+            .clone()
+            .unwrap_or(AgentKitContextTarget::Openai),
+        include_policies: input.include_policies.unwrap_or(true),
+        include_templates: input.include_templates.unwrap_or(true),
+        include_workflows: input.include_workflows.unwrap_or(true),
+        include_references: input.include_references.unwrap_or(false),
+        max_skills: input.max_skills,
+    };
+    let request_json = serde_json::to_string(&request)
+        .map_err(|error| format!("Unable to serialize context request: {error}"))?;
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        Command::new(node_command)
+            .arg(bridge_script)
+            .arg(request_json)
+            .current_dir(working_directory)
+            .output()
     })
+    .await
+    .map_err(|error| format!("Context builder task failed: {error}"))?
+    .map_err(|error| format!("Unable to run Agent Kit Context Builder: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "Agent Kit Context Builder failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse Agent Kit context: {error}"))
 }
 
-fn is_supported_context_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "md" | "txt" | "yaml" | "yml" | "json"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn compose_prompt(context: &AgentKitContext, task: &str, additional_context: Option<&str>) -> String {
-    let mut prompt = String::new();
-    prompt.push_str("You are AgentKitForge running an Agent Kit for a user.\n");
-    prompt.push_str("Follow the kit instructions, skill procedures, guardrails, and output expectations. Ask concise clarifying questions if required inputs are missing.\n\n");
-    prompt.push_str("## User Task\n\n");
-    prompt.push_str(task.trim());
-    prompt.push_str("\n\n");
-
+fn compose_openai_input(user_context: &str, additional_context: Option<&str>) -> String {
+    let mut input = user_context.trim().to_string();
     if let Some(additional_context) = additional_context.map(str::trim).filter(|value| !value.is_empty()) {
-        prompt.push_str("## Additional Context\n\n");
-        prompt.push_str(additional_context);
-        prompt.push_str("\n\n");
+        input.push_str("\n\nAdditional user context:\n");
+        input.push_str(additional_context);
     }
-
-    prompt.push_str("## AGENTKIT.md\n\n");
-    prompt.push_str(context.agentkit.trim());
-    prompt.push_str("\n\n");
-
-    prompt.push_str("## Skills\n\n");
-    for skill in &context.skills {
-        append_context_file(&mut prompt, skill);
-    }
-
-    if !context.policies.is_empty() {
-        prompt.push_str("## Policies\n\n");
-        for policy in &context.policies {
-            append_context_file(&mut prompt, policy);
-        }
-    }
-
-    if !context.templates.is_empty() {
-        prompt.push_str("## Templates\n\n");
-        for template in &context.templates {
-            append_context_file(&mut prompt, template);
-        }
-    }
-
-    prompt.push_str("## Response\n\n");
-    prompt.push_str("Produce the best answer for the user task using the Agent Kit context above.");
-    prompt
-}
-
-fn append_context_file(prompt: &mut String, file: &ContextFile) {
-    prompt.push_str("### ");
-    prompt.push_str(&file.relative_path);
-    prompt.push_str("\n\n");
-    prompt.push_str(file.content.trim());
-    prompt.push_str("\n\n");
+    input
 }
 
 fn required(label: &str, value: &str) -> Result<String, String> {

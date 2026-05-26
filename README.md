@@ -157,6 +157,26 @@ To run a kit inside Forge:
 
 For v0.1, Forge includes `AGENTKIT.md`, every `skills/*/SKILL.md` file, and supported files from `policies/` and `templates/` in the OpenAI prompt. Advanced skill routing and file uploads are not implemented yet.
 
+### Context Builder Options
+
+Use inside Forge builds OpenAI context through `agentkitforge-core` Context Builder.
+
+Context modes:
+
+- `all`: include all declared skills.
+- `triggered`: include skills whose triggers match the task. If no skill matches, the builder falls back to all skills and shows a warning.
+
+Context target defaults to `openai`. The target labels are reserved for future adapter-specific formatting; install targets are not implemented yet.
+
+Include options:
+
+- Policies: on by default.
+- Templates: on by default.
+- Workflows: on by default.
+- References: off by default to avoid oversized context.
+
+After a run, expand **Context details** to see included files, included skills, warnings, and approximate context length.
+
 ## App Sections
 
 - My Kits

@@ -132,6 +132,17 @@ type PublicSettings = {
 type RunAgentKitResult = {
   response: string;
   model: string;
+  context: AgentKitContextDetails;
+};
+
+type AgentKitContextMode = "all" | "triggered";
+type AgentKitContextTarget = "openai" | "chatgpt" | "claude" | "generic";
+
+type AgentKitContextDetails = {
+  includedFiles: string[];
+  includedSkills: string[];
+  warnings: string[];
+  approximateContextLength: number;
 };
 
 type NavItem = {
@@ -141,6 +152,8 @@ type NavItem = {
 };
 
 const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "trusted", "verified"];
+const contextModes: AgentKitContextMode[] = ["all", "triggered"];
+const contextTargets: AgentKitContextTarget[] = ["openai", "chatgpt", "claude", "generic"];
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
 const starterPrompt =
   "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
@@ -1513,6 +1526,13 @@ function UseScreen({
   const [additionalContext, setAdditionalContext] = useState("");
   const [model, setModel] = useState(settings.defaultModel || defaultRuntimeModel);
   const [maxOutputLength, setMaxOutputLength] = useState("1800");
+  const [contextMode, setContextMode] = useState<AgentKitContextMode>("triggered");
+  const [contextTarget, setContextTarget] = useState<AgentKitContextTarget>("openai");
+  const [includePolicies, setIncludePolicies] = useState(true);
+  const [includeTemplates, setIncludeTemplates] = useState(true);
+  const [includeWorkflows, setIncludeWorkflows] = useState(true);
+  const [includeReferences, setIncludeReferences] = useState(false);
+  const [maxSkills, setMaxSkills] = useState("");
   const [runResult, setRunResult] = useState<RunAgentKitResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [runFieldErrors, setRunFieldErrors] = useState<{
@@ -1583,6 +1603,13 @@ function UseScreen({
           additionalContext,
           model,
           maxOutputLength: Number.parseInt(maxOutputLength, 10) || undefined,
+          contextMode,
+          target: contextTarget,
+          includePolicies,
+          includeTemplates,
+          includeWorkflows,
+          includeReferences,
+          maxSkills: contextMode === "triggered" ? Number.parseInt(maxSkills, 10) || undefined : undefined,
         },
       });
       setRunResult(runtimeResult);
@@ -1745,6 +1772,87 @@ function UseScreen({
             onChange={(event) => setModel(event.target.value)}
             value={model}
           />
+
+          <div className="settings-grid two-column">
+            <div>
+              <label htmlFor="runtime-context-mode">Context mode</label>
+              <select
+                id="runtime-context-mode"
+                onChange={(event) => setContextMode(event.target.value as AgentKitContextMode)}
+                value={contextMode}
+              >
+                {contextModes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="runtime-target">Target</label>
+              <select
+                id="runtime-target"
+                onChange={(event) => setContextTarget(event.target.value as AgentKitContextTarget)}
+                value={contextTarget}
+              >
+                {contextTargets.map((target) => (
+                  <option key={target} value={target}>
+                    {target}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <label htmlFor="runtime-max-skills">Max skills</label>
+          <input
+            disabled={contextMode !== "triggered"}
+            id="runtime-max-skills"
+            min="1"
+            onChange={(event) => setMaxSkills(event.target.value)}
+            placeholder="Optional for triggered mode"
+            type="number"
+            value={maxSkills}
+          />
+
+          <div className="checkbox-grid">
+            <label className="checkbox-row" htmlFor="include-policies">
+              <input
+                checked={includePolicies}
+                id="include-policies"
+                onChange={(event) => setIncludePolicies(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Include policies</span>
+            </label>
+            <label className="checkbox-row" htmlFor="include-templates">
+              <input
+                checked={includeTemplates}
+                id="include-templates"
+                onChange={(event) => setIncludeTemplates(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Include templates</span>
+            </label>
+            <label className="checkbox-row" htmlFor="include-workflows">
+              <input
+                checked={includeWorkflows}
+                id="include-workflows"
+                onChange={(event) => setIncludeWorkflows(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Include workflows</span>
+            </label>
+            <label className="checkbox-row" htmlFor="include-references">
+              <input
+                checked={includeReferences}
+                id="include-references"
+                onChange={(event) => setIncludeReferences(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Include references</span>
+            </label>
+          </div>
 
           <label htmlFor="runtime-max-output">Max output tokens</label>
           <input
@@ -2254,6 +2362,37 @@ function ForgeRunResults({
       {copyState === "failed" && (
         <div className="field-error">Clipboard access failed. Select and copy the result text.</div>
       )}
+
+      <details className="context-details">
+        <summary>Context details</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Approx. context length</dt>
+            <dd>{result.context.approximateContextLength.toLocaleString()} characters</dd>
+          </div>
+          <div>
+            <dt>Included skills</dt>
+            <dd>{result.context.includedSkills.length > 0 ? result.context.includedSkills.join(", ") : "None"}</dd>
+          </div>
+        </dl>
+
+        {result.context.warnings.length > 0 && (
+          <div className="inline-warning">
+            {result.context.warnings.map((warning) => (
+              <div key={warning}>{warning}</div>
+            ))}
+          </div>
+        )}
+
+        <div className="created-files">
+          <h3>Included files</h3>
+          <ul>
+            {result.context.includedFiles.map((file) => (
+              <li key={file}>{file}</li>
+            ))}
+          </ul>
+        </div>
+      </details>
     </div>
   );
 }

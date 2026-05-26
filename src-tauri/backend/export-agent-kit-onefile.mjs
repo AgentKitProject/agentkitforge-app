@@ -23,5 +23,12 @@ async function loadCore() {
     return import(pathToFileURL(entry).href);
   }
 
+  const siblingEntry = path.resolve(process.cwd(), "..", "agentkitforge-core", "dist", "index.js");
+  try {
+    return await import(pathToFileURL(siblingEntry).href);
+  } catch {
+    // Fall back to the installed package.
+  }
+
   return import("agentkitforge-core");
 }
