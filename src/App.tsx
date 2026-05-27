@@ -12,10 +12,10 @@ import {
   PlayCircle,
   Settings,
   Sparkles,
-  Wrench,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
+import agentKitForgeIcon from "./assets/brand/agentkitforge-icon.svg";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
 type ExtendedSectionId = SectionId | "package-export" | "install-targets" | "about";
@@ -259,11 +259,11 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">
-            <Wrench size={20} strokeWidth={2.2} />
-          </div>
+          <img alt="" className="brand-icon" src={agentKitForgeIcon} />
           <div>
-            <div className="brand-name">AgentKitForge</div>
+            <div className="brand-name">
+              AgentKit<span>Forge</span>
+            </div>
             <div className="brand-subtitle">Desktop Forge</div>
           </div>
         </div>
@@ -3516,9 +3516,7 @@ function AboutScreen({ settings }: { settings: PublicSettings }) {
     <div className="about-screen">
       <section className="form-panel about-panel">
         <div className="about-header">
-          <div className="brand-mark about-mark">
-            <Wrench size={22} strokeWidth={2.2} />
-          </div>
+          <img alt="" className="about-mark" src={agentKitForgeIcon} />
           <div>
             <h2>AgentKitForge</h2>
             <p>Version {appVersion}</p>

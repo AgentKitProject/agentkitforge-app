@@ -77,6 +77,25 @@ The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` in
 
 The current app icon is a placeholder at `src-tauri/icons/icon.ico`. Replace that file and update `src-tauri/tauri.conf.json` if a full icon set is added later.
 
+## Branding
+
+The desktop app follows the finalized AgentKitForge brand direction from:
+
+```text
+brand-references/agentkitforge-approved-reference.png
+```
+
+Production placeholder SVG assets live in:
+
+```text
+src/assets/brand/agentkitforge-icon.svg
+src/assets/brand/agentkitforge-logo.svg
+```
+
+The UI uses the AgentKitForge light palette by default, with CSS variables for dark-mode support through the operating system preference. Paths, generated files, package names, JSON, and command-like content use a monospace stack.
+
+The Windows bundle still points at `src-tauri/icons/icon.ico`. Replace that file with a final generated `.ico` when production icon exports are available; no code signing or release upload is configured yet.
+
 ### Build Verification Checklist
 
 - Run `npm run check`.
