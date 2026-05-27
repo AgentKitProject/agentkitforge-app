@@ -260,6 +260,17 @@ AgentKitForge exports the Agent Kit's skills into a Codex-compatible skills dire
 
 AgentKitForge writes files only. It does not launch Codex, restart Codex, or verify that the Codex runtime loaded the exported skills.
 
+Claude Code plugin export is also available:
+
+1. Select an Agent Kit folder.
+2. Select the Claude Code plugins destination folder.
+3. Enable force overwrite only when replacing the AgentKitForge-generated plugin folder is intentional.
+4. Click **Export/Install to Claude Code**.
+
+AgentKitForge exports the Agent Kit into a Claude Code plugin-style folder, including a plugin manifest, skills, and supported kit content. Users choose the destination plugins folder; AgentKitForge does not infer or manage it automatically.
+
+AgentKitForge writes files only. It does not launch Claude Code, restart Claude Code, or verify that the Claude Code runtime loaded the plugin. This is an initial adapter, so verify plugin loading behavior in Claude Code.
+
 ## Settings
 
 Settings controls local app defaults and OpenAI access:

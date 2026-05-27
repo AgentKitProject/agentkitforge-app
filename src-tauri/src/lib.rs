@@ -182,6 +182,24 @@ struct ExportAgentKitToCodexResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ExportAgentKitToClaudeCodeInput {
+    kit_path: String,
+    destination_dir: String,
+    force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAgentKitToClaudeCodeResult {
+    destination_dir: String,
+    plugin_folder: String,
+    plugin_manifest_path: String,
+    exported_skill_folders: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TestOpenAIConnectionInput {
     model: Option<String>,
 }
@@ -901,6 +919,40 @@ fn export_agent_kit_to_codex<R: Runtime>(
 }
 
 #[tauri::command]
+fn export_agent_kit_to_claude_code<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ExportAgentKitToClaudeCodeInput,
+) -> Result<ExportAgentKitToClaudeCodeResult, String> {
+    let kit_path = canonicalize_directory(&input.kit_path)?;
+    let destination_dir = canonicalize_directory(&input.destination_dir)?;
+    let bridge_script = resolve_claude_code_export_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg(&kit_path)
+        .arg(&destination_dir)
+        .arg(if input.force { "true" } else { "false" })
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to run Claude Code plugin export: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            "Claude Code plugin export failed without output".to_string()
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse Claude Code export result: {error}"))
+}
+
+#[tauri::command]
 fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
@@ -1100,6 +1152,10 @@ fn resolve_package_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathB
 
 fn resolve_codex_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "export-agent-kit-codex.mjs")
+}
+
+fn resolve_claude_code_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "export-agent-kit-claude-code.mjs")
 }
 
 fn resolve_render_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -1749,7 +1805,8 @@ pub fn run() {
             validate_library_kit,
             mark_library_kit_used,
             import_agent_kit_package,
-            export_agent_kit_to_codex
+            export_agent_kit_to_codex,
+            export_agent_kit_to_claude_code
         ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");

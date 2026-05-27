@@ -133,6 +133,14 @@ type CodexExportResult = {
   warnings: string[];
 };
 
+type ClaudeCodeExportResult = {
+  destinationDir: string;
+  pluginFolder: string;
+  pluginManifestPath: string;
+  exportedSkillFolders: string[];
+  warnings: string[];
+};
+
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
@@ -2465,13 +2473,21 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
   const [destinationSkillsDir, setDestinationSkillsDir] = useState("");
   const [force, setForce] = useState(false);
+  const [claudeDestinationDir, setClaudeDestinationDir] = useState("");
+  const [claudeForce, setClaudeForce] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; destinationSkillsDir?: string }>({});
+  const [claudeFieldErrors, setClaudeFieldErrors] = useState<{ kitPath?: string; destinationDir?: string }>({});
   const [result, setResult] = useState<CodexExportResult | null>(null);
+  const [claudeResult, setClaudeResult] = useState<ClaudeCodeExportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [claudeError, setClaudeError] = useState<string | null>(null);
   const [isSelectingKit, setIsSelectingKit] = useState(false);
   const [isSelectingDestination, setIsSelectingDestination] = useState(false);
+  const [isSelectingClaudeDestination, setIsSelectingClaudeDestination] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isExportingClaude, setIsExportingClaude] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [claudeCopyState, setClaudeCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => {
     setKitPath(currentKitPath);
@@ -2486,6 +2502,7 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
       if (selectedPath) {
         setKitPath(selectedPath);
         setResult(null);
+        setClaudeResult(null);
       }
     } catch (caughtError) {
       setError(errorToMessage(caughtError));
@@ -2508,6 +2525,23 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
       setError(errorToMessage(caughtError));
     } finally {
       setIsSelectingDestination(false);
+    }
+  }
+
+  async function selectClaudeDestinationFolder() {
+    setIsSelectingClaudeDestination(true);
+    setClaudeError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        setClaudeDestinationDir(selectedPath);
+        setClaudeResult(null);
+      }
+    } catch (caughtError) {
+      setClaudeError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingClaudeDestination(false);
     }
   }
 
@@ -2536,11 +2570,44 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
     }
   }
 
+  async function exportToClaudeCode() {
+    const validationErrors = validateClaudeCodeExportForm(kitPath, claudeDestinationDir);
+    setClaudeFieldErrors(validationErrors);
+    setClaudeError(null);
+    setClaudeResult(null);
+    setClaudeCopyState("idle");
+
+    if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    setIsExportingClaude(true);
+
+    try {
+      const exportResult = await invoke<ClaudeCodeExportResult>("export_agent_kit_to_claude_code", {
+        input: { kitPath, destinationDir: claudeDestinationDir, force: claudeForce },
+      });
+      setClaudeResult(exportResult);
+    } catch (caughtError) {
+      setClaudeError(errorToMessage(caughtError));
+    } finally {
+      setIsExportingClaude(false);
+    }
+  }
+
   async function openDestinationFolder() {
     try {
       await invoke("open_folder", { path: result?.destinationSkillsDir ?? destinationSkillsDir });
     } catch (caughtError) {
       setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function openClaudeDestinationFolder() {
+    try {
+      await invoke("open_folder", { path: claudeResult?.destinationDir ?? claudeDestinationDir });
+    } catch (caughtError) {
+      setClaudeError(errorToMessage(caughtError));
     }
   }
 
@@ -2554,78 +2621,166 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
     }
   }
 
+  async function copyClaudeDestinationPath() {
+    const path = claudeResult?.destinationDir ?? claudeDestinationDir;
+    try {
+      await navigator.clipboard.writeText(path);
+      setClaudeCopyState("copied");
+    } catch {
+      setClaudeCopyState("failed");
+    }
+  }
+
   return (
-    <div className="build-layout">
-      <div className="form-panel">
-        <h2>Export to Codex</h2>
-        <p className="form-copy">
-          This exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can
-          discover them in future sessions.
-        </p>
-        <p className="form-copy">
-          AgentKitForge does not launch Codex or verify Codex loaded the skills.
-        </p>
+    <div className="install-targets-screen">
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Export to Codex</h2>
+          <p className="form-copy">
+            This exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can
+            discover them in future sessions.
+          </p>
+          <p className="form-copy">
+            AgentKitForge does not launch Codex or verify Codex loaded the skills.
+          </p>
 
-        <label htmlFor="codex-kit-folder">Agent Kit folder</label>
-        <div className="path-picker">
-          <input
-            id="codex-kit-folder"
-            onChange={(event) => {
-              setKitPath(event.target.value);
-              setResult(null);
-            }}
-            placeholder="Choose an Agent Kit"
-            value={kitPath}
-          />
-          <button className="icon-button" disabled={isSelectingKit || isExporting} onClick={selectKitFolder} title="Select kit folder" type="button">
-            <FolderOpen size={18} />
+          <label htmlFor="codex-kit-folder">Agent Kit folder</label>
+          <div className="path-picker">
+            <input
+              id="codex-kit-folder"
+              onChange={(event) => {
+                setKitPath(event.target.value);
+                setResult(null);
+                setClaudeResult(null);
+              }}
+              placeholder="Choose an Agent Kit"
+              value={kitPath}
+            />
+            <button className="icon-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} title="Select kit folder" type="button">
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={fieldErrors.kitPath} />
+
+          <label htmlFor="codex-destination">Codex skills destination folder</label>
+          <div className="path-picker">
+            <input
+              id="codex-destination"
+              onChange={(event) => {
+                setDestinationSkillsDir(event.target.value);
+                setResult(null);
+              }}
+              placeholder="C:\\Users\\you\\.codex\\skills"
+              value={destinationSkillsDir}
+            />
+            <button className="icon-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} title="Select Codex skills folder" type="button">
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={fieldErrors.destinationSkillsDir} />
+
+          <label className="checkbox-row" htmlFor="codex-force">
+            <input
+              checked={force}
+              id="codex-force"
+              onChange={(event) => setForce(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Force overwrite AgentKitForge-generated folders</span>
+          </label>
+
+          <button className="primary-button" disabled={isExporting} onClick={exportToCodex} type="button">
+            <Plug size={18} />
+            {isExporting ? "Exporting" : "Export/Install to Codex"}
           </button>
         </div>
-        <FieldError message={fieldErrors.kitPath} />
 
-        <label htmlFor="codex-destination">Codex skills destination folder</label>
-        <div className="path-picker">
-          <input
-            id="codex-destination"
-            onChange={(event) => {
-              setDestinationSkillsDir(event.target.value);
-              setResult(null);
-            }}
-            placeholder="C:\\Users\\you\\.codex\\skills"
-            value={destinationSkillsDir}
+        <div className="results-panel">
+          <div className="panel-label">Codex Export Result</div>
+          <CodexExportResults
+            copyState={copyState}
+            error={error}
+            isLoading={isExporting}
+            onCopyDestinationPath={copyDestinationPath}
+            onOpenDestinationFolder={openDestinationFolder}
+            result={result}
           />
-          <button className="icon-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} title="Select Codex skills folder" type="button">
-            <FolderOpen size={18} />
-          </button>
         </div>
-        <FieldError message={fieldErrors.destinationSkillsDir} />
-
-        <label className="checkbox-row" htmlFor="codex-force">
-          <input
-            checked={force}
-            id="codex-force"
-            onChange={(event) => setForce(event.target.checked)}
-            type="checkbox"
-          />
-          <span>Force overwrite AgentKitForge-generated folders</span>
-        </label>
-
-        <button className="primary-button" disabled={isExporting} onClick={exportToCodex} type="button">
-          <Plug size={18} />
-          {isExporting ? "Exporting" : "Export/Install to Codex"}
-        </button>
       </div>
 
-      <div className="results-panel">
-        <div className="panel-label">Codex Export Result</div>
-        <CodexExportResults
-          copyState={copyState}
-          error={error}
-          isLoading={isExporting}
-          onCopyDestinationPath={copyDestinationPath}
-          onOpenDestinationFolder={openDestinationFolder}
-          result={result}
-        />
+      <div className="build-layout">
+        <div className="form-panel">
+          <h2>Export to Claude Code</h2>
+          <p className="form-copy">
+            This exports the Agent Kit into a Claude Code plugin-style folder.
+          </p>
+          <p className="form-copy">
+            AgentKitForge does not launch Claude Code or verify Claude Code loaded the plugin.
+            This is an initial adapter; verify plugin loading behavior in Claude Code.
+          </p>
+
+          <label htmlFor="claude-kit-folder">Agent Kit folder</label>
+          <div className="path-picker">
+            <input
+              id="claude-kit-folder"
+              onChange={(event) => {
+                setKitPath(event.target.value);
+                setResult(null);
+                setClaudeResult(null);
+              }}
+              placeholder="Choose an Agent Kit"
+              value={kitPath}
+            />
+            <button className="icon-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} title="Select kit folder" type="button">
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={claudeFieldErrors.kitPath} />
+
+          <label htmlFor="claude-destination">Claude Code plugins destination folder</label>
+          <div className="path-picker">
+            <input
+              id="claude-destination"
+              onChange={(event) => {
+                setClaudeDestinationDir(event.target.value);
+                setClaudeResult(null);
+              }}
+              placeholder="C:\\Users\\you\\.claude\\plugins"
+              value={claudeDestinationDir}
+            />
+            <button className="icon-button" disabled={isSelectingClaudeDestination || isExportingClaude} onClick={selectClaudeDestinationFolder} title="Select Claude Code plugins folder" type="button">
+              <FolderOpen size={18} />
+            </button>
+          </div>
+          <FieldError message={claudeFieldErrors.destinationDir} />
+
+          <label className="checkbox-row" htmlFor="claude-force">
+            <input
+              checked={claudeForce}
+              id="claude-force"
+              onChange={(event) => setClaudeForce(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Force overwrite AgentKitForge-generated plugin folder</span>
+          </label>
+
+          <button className="primary-button" disabled={isExportingClaude} onClick={exportToClaudeCode} type="button">
+            <Plug size={18} />
+            {isExportingClaude ? "Exporting" : "Export/Install to Claude Code"}
+          </button>
+        </div>
+
+        <div className="results-panel">
+          <div className="panel-label">Claude Code Export Result</div>
+          <ClaudeCodeExportResults
+            copyState={claudeCopyState}
+            error={claudeError}
+            isLoading={isExportingClaude}
+            onCopyDestinationPath={copyClaudeDestinationPath}
+            onOpenDestinationFolder={openClaudeDestinationFolder}
+            result={claudeResult}
+          />
+        </div>
       </div>
     </div>
   );
@@ -2677,6 +2832,90 @@ function CodexExportResults({
         <div>
           <dt>Generated index folder</dt>
           <dd>{result.generatedIndexFolder || "None"}</dd>
+        </div>
+      </dl>
+
+      {result.warnings.length > 0 && (
+        <div className="inline-warning">
+          {result.warnings.map((warning) => (
+            <div key={warning}>{warning}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="button-row">
+        <button className="secondary-button compact-button" onClick={onOpenDestinationFolder} type="button">
+          Open destination folder
+        </button>
+        <button className="secondary-button compact-button" onClick={onCopyDestinationPath} type="button">
+          Copy destination path
+        </button>
+      </div>
+      {copyState === "copied" && <div className="copy-state">Destination path copied.</div>}
+      {copyState === "failed" && <div className="field-error">Clipboard access failed.</div>}
+
+      <div className="created-files">
+        <h3>Exported skill folders</h3>
+        <ul>
+          {result.exportedSkillFolders.map((folder) => (
+            <li key={folder}>{folder}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function ClaudeCodeExportResults({
+  copyState,
+  error,
+  isLoading,
+  onCopyDestinationPath,
+  onOpenDestinationFolder,
+  result,
+}: {
+  copyState: "idle" | "copied" | "failed";
+  error: string | null;
+  isLoading: boolean;
+  onCopyDestinationPath: () => void;
+  onOpenDestinationFolder: () => void;
+  result: ClaudeCodeExportResult | null;
+}) {
+  if (isLoading) {
+    return <p className="state-copy">Exporting Claude Code plugin...</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="error-state" role="alert">
+        {error}
+      </div>
+    );
+  }
+
+  if (!result) {
+    return <p className="state-copy">Export a kit to see Claude Code plugin files here.</p>;
+  }
+
+  return (
+    <div className="artifact-results">
+      <div className="status-banner valid">
+        <strong>Exported</strong>
+        <span>{result.exportedSkillFolders.length} skill folder{result.exportedSkillFolders.length === 1 ? "" : "s"}</span>
+      </div>
+
+      <dl className="report-meta">
+        <div>
+          <dt>Destination directory</dt>
+          <dd>{result.destinationDir}</dd>
+        </div>
+        <div>
+          <dt>Generated plugin folder</dt>
+          <dd>{result.pluginFolder}</dd>
+        </div>
+        <div>
+          <dt>Plugin manifest path</dt>
+          <dd>{result.pluginManifestPath}</dd>
         </div>
       </dl>
 
@@ -3113,6 +3352,20 @@ function validateCodexExportForm(kitPath: string, destinationSkillsDir: string) 
 
   if (destinationSkillsDir.trim() === "") {
     errors.destinationSkillsDir = "Codex skills destination folder is required.";
+  }
+
+  return errors;
+}
+
+function validateClaudeCodeExportForm(kitPath: string, destinationDir: string) {
+  const errors: { kitPath?: string; destinationDir?: string } = {};
+
+  if (kitPath.trim() === "") {
+    errors.kitPath = "Kit folder is required.";
+  }
+
+  if (destinationDir.trim() === "") {
+    errors.destinationDir = "Claude Code plugins destination folder is required.";
   }
 
   return errors;

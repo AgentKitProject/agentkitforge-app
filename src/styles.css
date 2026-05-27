@@ -335,6 +335,11 @@ textarea {
   gap: 26px;
 }
 
+.install-targets-screen {
+  display: grid;
+  gap: 26px;
+}
+
 .placeholder-card,
 .form-panel,
 .results-panel {
