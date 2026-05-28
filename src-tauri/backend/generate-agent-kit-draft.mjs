@@ -1,8 +1,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [, , inputJson] = process.argv;
+const [, , actionOrInputJson, maybeInputJson] = process.argv;
 const providerJson = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
+const action = maybeInputJson ? actionOrInputJson : "generate";
+const inputJson = maybeInputJson ?? actionOrInputJson;
 
 if (!inputJson) {
   console.error("Draft generation input is required.");
@@ -18,6 +20,45 @@ try {
   const input = JSON.parse(inputJson);
   const provider = JSON.parse(providerJson);
   const core = await loadCore();
+  const model = input.model || "gpt-5-mini";
+
+  if (action === "revise") {
+    const session = core.validateDraftSession(input.session);
+    const currentRevision = core.getCurrentDraftRevision(session);
+    const revisionRequest = core.createAgentKitDraftRevisionRequest({
+      currentDraft: currentRevision.draft,
+      changeRequest: input.changeRequest,
+      originalRequest: session.originalRequest,
+      desiredValidationLevel: input.desiredValidationLevel,
+      constraints: input.constraints,
+      sourceNotes: input.sourceNotes,
+    });
+    const rawText = await callProvider(provider, model, revisionRequest);
+    const draftJson = parseJsonObject(rawText);
+    const draft = parseAgentKitDraft(core, draftJson);
+    const updatedSession = core.addDraftRevision(session, {
+      draft,
+      changeRequest: input.changeRequest,
+      provider: provider.name,
+      model,
+      warnings: revisionRequest.warnings,
+    });
+    writeDraftResult({
+      draft,
+      warnings: revisionRequest.warnings,
+      provider,
+      model,
+      rawResponse: null,
+      session: updatedSession,
+      currentRevision: core.getCurrentDraftRevision(updatedSession),
+    });
+    process.exit(0);
+  }
+
+  if (action !== "generate") {
+    throw new Error(`Unsupported draft action: ${action}`);
+  }
+
   const draftRequest = core.createAgentKitDraftRequest({
     userRequest: input.userRequest,
     targetUsers: input.targetUsers,
@@ -26,9 +67,37 @@ try {
     constraints: input.constraints,
     sourceNotes: input.sourceNotes,
   });
-  const model = input.model || "gpt-5-mini";
   const rawText = await callProvider(provider, model, draftRequest);
   const draftJson = parseJsonObject(rawText);
+  const draft = parseAgentKitDraft(core, draftJson);
+  const session = core.createDraftSession({
+    originalRequest: input.userRequest,
+    initialDraft: draft,
+    provider: provider.name,
+    model,
+    warnings: draftRequest.warnings,
+    name: draft.name,
+    metadata: {
+      domain: input.domain,
+      targetUsers: input.targetUsers,
+      desiredValidationLevel: input.desiredValidationLevel,
+    },
+  });
+  writeDraftResult({
+    draft,
+    warnings: draftRequest.warnings,
+    provider,
+    model,
+    rawResponse: null,
+    session,
+    currentRevision: core.getCurrentDraftRevision(session),
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+
+function parseAgentKitDraft(core, draftJson) {
   const parsed = core.agentKitDraftSchema.safeParse(draftJson);
 
   if (!parsed.success) {
@@ -41,21 +110,23 @@ try {
     throw new Error(`Generated draft did not match the AgentKitDraft schema:\n${issues}`);
   }
 
-  const draft = parsed.data;
+  return parsed.data;
+}
+
+function writeDraftResult({ draft, warnings, provider, model, rawResponse, session, currentRevision }) {
   process.stdout.write(
     JSON.stringify({
       draftJson: draft,
       draftJsonPretty: `${JSON.stringify(draft, null, 2)}\n`,
-      warnings: draftRequest.warnings,
+      warnings,
       providerId: provider.id,
       providerName: provider.name,
       model,
-      rawResponse: null,
+      rawResponse,
+      session,
+      currentRevision,
     }),
   );
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
 }
 
 async function callProvider(provider, model, draftRequest) {

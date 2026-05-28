@@ -101,7 +101,7 @@ To regenerate app/taskbar icons after changing the SVG source, run `npx tauri ic
 - Run `npm run check`.
 - Run `npm run build:tauri`.
 - Create a kit from a template.
-- Validate a kit.
+- Validate a kit from My Kits or after Build/Import.
 - Run a kit with OpenAI inside Forge.
 - Package/export a kit.
 - Import a `.agentkit.zip` package.
@@ -128,23 +128,30 @@ The flow has seven steps:
 
 1. **Basics**: kit name, auto-generated kit ID, description, domain, target users, validation level, and save location.
 2. **Skills**: add repeatable skills with triggers, use guidance, procedure steps, required context, output expectations, and risk level.
-3. **Guardrails**: add domain presets or custom boundaries. Presets cover finance, legal, medical, DevOps/SRE, security, compliance, HR/recruiting, and general business.
-4. **Outputs/Templates**: define expected output sections, optional output template, whether the result is document-like, suggested download name, and summary style.
-5. **Required Inputs**: define what users should provide when running the kit.
-6. **Examples**: add example prompts, required input examples, and expected outputs.
+3. **Policies - Optional**: add domain presets or custom policies. Policies are guardrails that tell the AI what to avoid, require, or escalate. Presets cover finance/accounting, legal, healthcare/medical, DevOps/SRE, cloud/infrastructure, security, compliance, HR/recruiting, and general business.
+4. **Outputs / Templates - Optional**: define expected output sections, optional output template, whether the result is document-like, suggested download name, and summary style.
+5. **Prepared Prompts**: define reusable prompt templates users can run later in Use mode.
+6. **Examples - Optional**: add example prompts, example input values, and expected outputs.
 7. **Review & Create**: review the summary and create, validate, use, package, or open the kit.
+
+Required steps are Basics, at least one Skill, and at least one Prepared Prompt. Policies, Templates, and Examples are optional.
+
+Prepared Prompts are centered in the Guided Builder. Each prompt includes:
+
+- prompt name and auto-generated prompt ID
+- description
+- prompt template with variables such as `{{company_name}}`
+- inputs/variables with label, help text, type, required flag, placeholder, default value, choices, and include-in-prompt setting
+- output mode: text, markdown, or document
+- document-like output flag
+- optional suggested output filename
+- optional tags
+
+Required inputs now belong inside Prepared Prompts rather than a standalone builder step. The generated kit writes these prompts to the core `preparedPrompts` draft field so Use mode can list the prompts, collect their inputs, preview the rendered prompt, and emphasize Markdown download for document-like outputs.
 
 Guided Builder builds an AgentKitDraft internally and renders it through `agentkitforge-core`. The raw draft JSON is hidden by default and available under Advanced details after creation.
 
-Required inputs are stored in the generated kit at:
-
-```text
-templates/agentkitforge/required-inputs.json
-```
-
-This keeps the kit compatible with current core validation while giving the desktop app a future-friendly place to read structured input definitions. Each input can define a label, help text, required flag, input type, placeholder, choice values, and whether it should be included in the generated prompt.
-
-If the kit includes guardrails and examples, Guided Builder targets `trusted` validation where practical. Otherwise it targets the selected validation level, with `local-valid` as the minimum.
+If the kit includes policies and examples, Guided Builder targets `trusted` validation where practical. Otherwise it targets the selected validation level, with `local-valid` as the minimum.
 
 Use **Build with AI** when you want an AI provider to draft the kit from a description. Use **Guided Builder** when you want direct control through forms.
 
@@ -162,7 +169,7 @@ The app creates the kit in a child folder named after the kit id. For example, o
 
 Use force overwrite only when you want template files to be written into an existing non-empty kit folder. Existing unrelated files are left in place by `agentkitforge-core`.
 
-After creation, use **Validate created kit** to switch to validation with the default profile for the template:
+After creation, use **Validate created kit** from the result panel to check the kit with the default profile for the template:
 
 - `blank` uses `local-valid`
 - `financial-review` uses `trusted`
@@ -175,7 +182,7 @@ Open the Build section and use **From Draft JSON** when you already have an `Age
 2. Select the target output folder for the rendered Agent Kit.
 3. Enable force overwrite only when rendering into a non-empty folder is intentional.
 4. Click **Render**.
-5. Use **Validate rendered kit** to open the Validate section with the rendered folder selected.
+5. Use **Validate rendered kit** from the result panel to check the rendered folder.
 
 Draft JSON is the handoff format for the AI-assisted builder flow. Later, AgentKitForge will generate these drafts from natural-language requests; for now, you can render draft JSON produced by `agentkitforge-core` or checked into local examples.
 
@@ -223,20 +230,43 @@ In the Build section, describe the Agent Kit you want and optionally provide:
 
 The domain field is searchable. You can select a known domain such as Finance / Accounting, Customer Support, Security, or Software Engineering, or type any custom domain. Known domains are suggestions, not restrictions.
 
-AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to the selected AI provider, parses the returned AgentKitDraft JSON, and validates it against the core draft schema. Review the generated JSON before rendering it.
+Build with AI is iterative. AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to the selected AI provider, parses the returned AgentKitDraft JSON, validates it against the core draft schema, and starts an AI Draft Session.
+
+After the initial draft is created, the screen shows a friendly review workspace with:
+
+- current draft version
+- kit name, description, domain, and target users
+- counts for skills, policies, prepared prompts, templates, and examples
+- draft section cards for Basics, Skills, Policies, Prepared Prompts, Templates / Outputs, and Examples
+- raw JSON hidden under Advanced JSON
+
+To revise a draft, type a change request such as "Add a prepared prompt for client memos" or "Ask for company name and reporting period before running." AgentKitForge calls the core revision request builder, sends the current draft plus your change request to the selected provider, expects a full updated AgentKitDraft JSON response, validates it, and adds a new revision to the session.
+
+Revision history shows entries such as `v1 Initial draft`, `v2 <change request summary>`, and later revisions. You can restore an older revision and render the current revision when satisfied. Visual diffing is not implemented yet.
 
 After generation, you can:
 
 - Copy the draft JSON.
 - Save the draft JSON to disk.
-- Render the draft into an Agent Kit folder.
+- Request changes and create new revisions.
+- Restore an older revision.
+- Render the current draft into an Agent Kit folder.
 - Validate the rendered kit.
+- Clear the session and start over.
 
-Draft JSON is the review and handoff step between AI-assisted planning and local kit generation. You can edit saved drafts before rendering, or render them immediately and iterate on the generated kit files.
+Draft JSON is the review and handoff step between AI-assisted planning and local kit generation. For v0.1, draft sessions live in app state during the session; use **Save draft JSON** to persist the current revision locally. You can edit saved drafts before rendering, or render them immediately and iterate on the generated kit files.
 
-## Export a One-File Markdown Bundle
+If a provider is marked as not reliably supporting structured JSON, AgentKitForge warns before generation and revisions. The returned draft is still validated before it can be used.
 
-Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web assistant:
+## Prepare for Web Assistant
+
+Open the Use section and use **Prepare for Web Assistant** to create a one-file Markdown version of your Agent Kit and a starter prompt for tools like ChatGPT or Claude. This does not install anything; it prepares files you can upload or paste.
+
+This is different from:
+
+- **Use inside Forge**: AgentKitForge runs the kit with your selected AI provider.
+- **Install Targets**: exports the kit into supported tools like Codex or Claude Code.
+- **Package / Export**: creates shareable package artifacts.
 
 1. Select a local Agent Kit folder.
 2. Select a Markdown output file, or select an output folder to use the default `<kit-id>-<version>.onefile.md` file name.
@@ -254,10 +284,17 @@ Normal views show friendly file names and locations first. Full filesystem paths
 
 Open **Package / Export** when a kit is ready to distribute or hand off.
 
+Choose a kit from **My Kits** first. Use **Add existing kit...** only when the kit is not in your library yet. Exports default to the app-managed exports folder, normally `Documents/AgentKitForge/Exports`; the screen shows this as **AgentKitForge Exports** and keeps the full path under Advanced details.
+
 Artifact types:
 
-- `.agentkit.zip`: full portable package containing the Agent Kit folder contents. Use this for distribution, archival, or later install/import workflows.
-- `.onefile.md`: upload-friendly Markdown bundle containing the main instructions and supported kit content. Use this with ChatGPT, Claude, or another assistant that accepts file uploads.
+- `.agentkit.zip`: full portable package for importing into AgentKitForge, sharing, or publishing later. It includes structure, metadata, skills, policies, prepared prompts, templates, examples, and other kit files.
+- `.onefile.md`: upload-friendly Markdown bundle for uploading or pasting into web assistants like ChatGPT or Claude. It is easier to use manually, but it is not a full Agent Kit package.
+
+Artifact names are predictable:
+
+- `<kit-id>-<version>.agentkit.zip`
+- `<kit-id>-<version>.onefile.md`
 
 The screen can run validation before creating the `.agentkit.zip`. If validation is enabled and the selected profile fails, packaging is blocked until the kit is fixed or validation is explicitly disabled. One-file Markdown export does not run validation automatically.
 
@@ -320,13 +357,15 @@ The response metadata panel shows the kit name when available, model used, conte
 ## App Sections
 
 - My Kits
+- Import
 - Build
 - Use
-- Validate
 - Package / Export
 - Install Targets
 - Settings
 - About
+
+Validation is contextual rather than a primary workflow. You can validate from My Kits, Build result panels, Import results, before Use with **Validate before running**, before Package / Export, and before Install Targets. When validation finds issues, the app shows **Needs attention** with issues grouped by severity; full paths and technical details stay under Advanced sections.
 
 ## Install Targets
 
@@ -334,23 +373,23 @@ Use **Install Targets** to export an Agent Kit into tool-specific local formats.
 
 The first supported target is Codex skills:
 
-1. Select an Agent Kit folder.
-2. Select the Codex skills destination folder.
+1. Choose an Agent Kit from My Kits.
+2. Choose the Codex skills destination folder if one has not been saved yet.
 3. Enable force overwrite only when replacing AgentKitForge-generated export folders is intentional.
 4. Click **Export/Install to Codex**.
 
-AgentKitForge exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can discover them in future sessions. Users choose the destination skills folder; AgentKitForge does not infer or manage it automatically.
+Codex needs skills in its own skills folder. AgentKitForge copies the kit's skills there so Codex can discover them in future sessions. Users choose the destination skills folder; AgentKitForge remembers it locally after selection.
 
 AgentKitForge writes files only. It does not launch Codex, restart Codex, or verify that the Codex runtime loaded the exported skills.
 
 Claude Code plugin export is also available:
 
-1. Select an Agent Kit folder.
-2. Select the Claude Code plugins destination folder.
+1. Choose an Agent Kit from My Kits.
+2. Choose the Claude Code plugins destination folder if one has not been saved yet.
 3. Enable force overwrite only when replacing the AgentKitForge-generated plugin folder is intentional.
 4. Click **Export/Install to Claude Code**.
 
-AgentKitForge exports the Agent Kit into a Claude Code plugin-style folder, including a plugin manifest, skills, and supported kit content. Users choose the destination plugins folder; AgentKitForge does not infer or manage it automatically.
+Claude Code uses plugin-style folders. AgentKitForge exports the kit as a Claude Code plugin-style package, including a plugin manifest, skills, and supported kit content. Users choose the destination plugins folder; AgentKitForge remembers it locally after selection.
 
 AgentKitForge writes files only. It does not launch Claude Code, restart Claude Code, or verify that the Claude Code runtime loaded the plugin. This is an initial adapter, so verify plugin loading behavior in Claude Code.
 
@@ -373,25 +412,40 @@ Settings are stored in Tauri app-local data as `settings.json`. On Windows this 
 
 ## About
 
-The About screen shows the AgentKitForge version, product description, placeholder links for AgentKitForge.com, AgentKitMarket.com, and the GitHub repo, plus local-only privacy and AI provider key storage notes.
+The About screen shows the AgentKitForge version, product description, links to AgentKitForge.com, Docs, and the Agent Kit Spec, plus local-only privacy and AI provider key storage notes.
+
+Docs links:
+
+- https://agentkitforge.com/
+- https://agentkitforge.com/docs/
+- https://agentkitforge.com/agent-kit-spec/
 
 ## My Kits Library
 
-My Kits is a local-only library of Agent Kit folders on this machine. It stores metadata and paths so you can quickly reopen, validate, use, or package kits without moving or copying the kit folders.
+My Kits is a local-only library of Agent Kit folders on this machine. It is for kits you already have. It stores metadata and paths so you can quickly reopen, validate, use, package/export, or install kits without moving or copying the kit folders.
 
-Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. Removing a kit from My Kits only removes the local library entry; it does not delete files from disk.
+Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. **Remove from My Kits** only removes the local library entry; it does not delete files from disk.
 
 The library is stored in Tauri app-local data as `my-kits.json`. On Windows this is typically under the user's local app data folder for AgentKitForge, alongside `settings.json`. The exact path is resolved by Tauri at runtime.
 
 If a kit folder no longer exists, My Kits shows a warning and disables actions that need the folder.
 
-## Import .agentkit.zip Packages
+## Import Agent Kits
 
-Use **My Kits** to import a downloaded or shared `.agentkit.zip` package:
+Import is separate from My Kits. Use **Import** to bring in kits from elsewhere, then valid imports are added to My Kits automatically.
 
-1. Click **Import .agentkit.zip**.
-2. Select the package file.
-3. Select a destination root folder.
+Import options:
+
+- **From .agentkit.zip**: implemented for portable Agent Kit packages.
+- **From Folder**: adds an existing local Agent Kit folder to My Kits without copying it.
+- **From Agent Kit Market**: placeholder for later.
+- **From Organization Repository**: placeholder for later.
+
+To import a downloaded or shared `.agentkit.zip` package:
+
+1. Open **Import**.
+2. Click **Choose package** and select the package file.
+3. Use the default destination, **AgentKitForge Library**, or choose another destination.
 4. Choose a validation profile.
 5. Enable force overwrite only if replacing the intended import folder is acceptable.
 6. Click **Import package**.
@@ -399,6 +453,18 @@ Use **My Kits** to import a downloaded or shared `.agentkit.zip` package:
 AgentKitForge extracts the package into a subfolder under the selected destination root, based on the package filename. Import validates the extracted kit immediately. Valid imports are added to My Kits automatically. Invalid imports remain extracted so you can inspect the issues, and you can choose to add them to My Kits anyway.
 
 The importer blocks zip path traversal and refuses to overwrite non-empty folders unless force overwrite is enabled.
+
+## Default App Folders
+
+AgentKitForge uses friendly labels in normal screens and keeps full paths under Advanced details:
+
+- **AgentKitForge Library**: normally `Documents/AgentKitForge/Kits`
+- **AgentKitForge Exports**: normally `Documents/AgentKitForge/Exports`
+- **AgentKitForge Drafts**: normally `Documents/AgentKitForge/Drafts`
+
+If the configured app folder is OS-specific or changed in Settings, AgentKitForge still shows friendly labels first and exposes the exact folder path through **Show full path**, **Copy path**, or **Open folder** actions.
+
+Raw and technical details are hidden by default. Full filesystem paths, raw draft JSON, raw provider responses, long prompt previews, validation internals, manifest details, and package internals are available through **Advanced details**, **Show full path**, **Show raw JSON**, or **Show technical details** controls when needed.
 
 ## Requirements
 

@@ -299,6 +299,18 @@ struct GenerateAgentKitDraftInput {
     model: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviseAgentKitDraftInput {
+    session: serde_json::Value,
+    change_request: String,
+    desired_validation_level: ValidationProfile,
+    constraints: Option<String>,
+    source_notes: Option<String>,
+    provider_id: Option<String>,
+    model: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GenerateAgentKitDraftResult {
@@ -309,6 +321,8 @@ struct GenerateAgentKitDraftResult {
     provider_name: String,
     model: String,
     raw_response: Option<String>,
+    session: Option<serde_json::Value>,
+    current_revision: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -739,32 +753,16 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
 
     let request_json = serde_json::to_string(&request).map_err(|error| error.to_string())?;
     let provider_json = serde_json::to_string(&provider).map_err(|error| error.to_string())?;
-    let working_directory = resolve_command_working_directory(&app);
-    let output = tauri::async_runtime::spawn_blocking(move || {
-        Command::new(node_command)
-            .arg(&bridge_script)
-            .env("AGENTKITFORGE_AI_PROVIDER_CONFIG", provider_json)
-            .arg(request_json)
-            .current_dir(working_directory)
-            .output()
-    })
+    run_ai_draft_bridge(
+        &app,
+        bridge_script,
+        node_command,
+        provider_json,
+        request_json,
+        "generate",
+        "AI draft generation",
+    )
     .await
-    .map_err(|error| format!("AI draft generation task failed: {error}"))?
-    .map_err(|error| format!("Unable to run AI draft generation: {error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        return Err(if detail.is_empty() {
-            "AI draft generation failed without output".to_string()
-        } else {
-            detail
-        });
-    }
-
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("Unable to parse generated draft result: {error}"))
 }
 
 #[tauri::command]
@@ -773,6 +771,78 @@ async fn generate_agent_kit_draft_with_ai<R: Runtime>(
     input: GenerateAgentKitDraftInput,
 ) -> Result<GenerateAgentKitDraftResult, String> {
     generate_agent_kit_draft_with_openai(app, input).await
+}
+
+#[tauri::command]
+async fn revise_agent_kit_draft_with_ai<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ReviseAgentKitDraftInput,
+) -> Result<GenerateAgentKitDraftResult, String> {
+    let change_request = clean_required_value("Change request", &input.change_request)?;
+    let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
+    let model = ai_providers::selected_model(&provider, input.model.as_deref())?;
+    let bridge_script = resolve_generate_draft_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let request = serde_json::json!({
+        "session": input.session,
+        "changeRequest": change_request,
+        "desiredValidationLevel": input.desired_validation_level.as_str(),
+        "constraints": split_lines_or_commas(input.constraints.as_deref()),
+        "sourceNotes": split_lines_or_commas(input.source_notes.as_deref()),
+        "model": model,
+    });
+
+    let request_json = serde_json::to_string(&request).map_err(|error| error.to_string())?;
+    let provider_json = serde_json::to_string(&provider).map_err(|error| error.to_string())?;
+    run_ai_draft_bridge(
+        &app,
+        bridge_script,
+        node_command,
+        provider_json,
+        request_json,
+        "revise",
+        "AI draft revision",
+    )
+    .await
+}
+
+async fn run_ai_draft_bridge<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    bridge_script: PathBuf,
+    node_command: String,
+    provider_json: String,
+    request_json: String,
+    action: &'static str,
+    label: &'static str,
+) -> Result<GenerateAgentKitDraftResult, String> {
+    let working_directory = resolve_command_working_directory(app);
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        Command::new(node_command)
+            .arg(&bridge_script)
+            .arg(action)
+            .env("AGENTKITFORGE_AI_PROVIDER_CONFIG", provider_json)
+            .arg(request_json)
+            .current_dir(working_directory)
+            .output()
+    })
+    .await
+    .map_err(|error| format!("{label} task failed: {error}"))?
+    .map_err(|error| format!("Unable to run {label}: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            format!("{label} failed without output")
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse {label} result: {error}"))
 }
 
 #[tauri::command]
@@ -852,6 +922,44 @@ fn open_folder(path: String) -> Result<(), String> {
             .arg(folder)
             .spawn()
             .map_err(|error| format!("Unable to open output folder: {error}"))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    if !matches!(
+        url.as_str(),
+        "https://agentkitforge.com/"
+            | "https://agentkitforge.com/docs/"
+            | "https://agentkitforge.com/agent-kit-spec/"
+    ) {
+        return Err("Unsupported external link.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|error| format!("Unable to open link: {error}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|error| format!("Unable to open link: {error}"))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|error| format!("Unable to open link: {error}"))?;
     }
 
     Ok(())
@@ -1962,6 +2070,7 @@ pub fn run() {
             render_generated_agent_kit_draft,
             generate_agent_kit_draft_with_openai,
             generate_agent_kit_draft_with_ai,
+            revise_agent_kit_draft_with_ai,
             save_agent_kit_draft_json,
             save_markdown_file,
             get_agent_kit_starter_hint,
@@ -1986,6 +2095,7 @@ pub fn run() {
             validate_library_kit,
             mark_library_kit_used,
             import_agent_kit_package,
+            open_external_url,
             export_agent_kit_to_codex,
             export_agent_kit_to_claude_code
         ])

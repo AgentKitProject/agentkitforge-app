@@ -28,7 +28,7 @@ import {
 import type { AiProviderType } from "../../agentkitforge-core/dist/providers/types.js";
 import agentKitForgeIcon from "./assets/brand/agentkitforge-icon.svg";
 
-type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
+type SectionId = "my-kits" | "import" | "build" | "use" | "validate" | "settings";
 type ExtendedSectionId = SectionId | "package-export" | "install-targets" | "about";
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
@@ -128,6 +128,40 @@ type GenerateAgentKitDraftResult = {
   providerName: string;
   model: string;
   rawResponse?: string;
+  session?: AgentKitDraftSession;
+  currentRevision?: AgentKitDraftRevision;
+};
+
+type AgentKitDraftRevision = {
+  id: string;
+  version: number;
+  draft: unknown;
+  changeRequest?: string;
+  provider?: string;
+  model?: string;
+  warnings?: string[];
+  createdAt: string;
+};
+
+type AgentKitDraftSession = {
+  id: string;
+  name: string;
+  originalRequest: string;
+  currentRevisionId: string;
+  revisions: AgentKitDraftRevision[];
+  createdAt: string;
+  updatedAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+type ReviseAgentKitDraftInput = {
+  session: AgentKitDraftSession;
+  changeRequest: string;
+  desiredValidationLevel: ValidationProfile;
+  constraints: string;
+  sourceNotes: string;
+  providerId: string;
+  model: string;
 };
 
 type CreateAgentKitInput = {
@@ -283,9 +317,9 @@ type RequiredInputFields = {
 type GuidedBuilderStep =
   | "basics"
   | "skills"
-  | "guardrails"
+  | "policies"
   | "outputs"
-  | "inputs"
+  | "prompts"
   | "examples"
   | "review";
 
@@ -312,16 +346,30 @@ type GuidedRequiredInput = {
   label: string;
   description: string;
   required: boolean;
-  inputType: "short-text" | "long-text" | "choice" | "multi-choice" | "date" | "number";
+  inputType: PreparedPromptInputType;
   placeholder: string;
+  defaultValue: string;
   includeInPrompt: boolean;
   choices: string;
 };
 
+type GuidedPreparedPrompt = {
+  id: string;
+  name: string;
+  description: string;
+  template: string;
+  inputs: GuidedRequiredInput[];
+  outputMode: "text" | "markdown" | "document";
+  documentLikeOutput: boolean;
+  suggestedFileName: string;
+  tags: string;
+};
+
 type GuidedExample = {
   id: string;
+  promptId: string;
   prompt: string;
-  requiredInputExamples: string;
+  inputExamples: string;
   output: string;
 };
 
@@ -340,7 +388,7 @@ type GuidedBuilderState = {
   documentLike: boolean;
   downloadFileName: string;
   summaryStyle: string;
-  requiredInputs: GuidedRequiredInput[];
+  preparedPrompts: GuidedPreparedPrompt[];
   examples: GuidedExample[];
   force: boolean;
 };
@@ -364,10 +412,10 @@ const buildTabs: { id: BuildTabId; label: string }[] = [
 const guidedSteps: { id: GuidedBuilderStep; label: string }[] = [
   { id: "basics", label: "Basics" },
   { id: "skills", label: "Skills" },
-  { id: "guardrails", label: "Guardrails" },
-  { id: "outputs", label: "Outputs/Templates" },
-  { id: "inputs", label: "Required Inputs" },
-  { id: "examples", label: "Examples" },
+  { id: "policies", label: "Policies - Optional" },
+  { id: "outputs", label: "Outputs / Templates - Optional" },
+  { id: "prompts", label: "Prepared Prompts" },
+  { id: "examples", label: "Examples - Optional" },
   { id: "review", label: "Review & Create" },
 ];
 const knownDomains = [
@@ -394,6 +442,13 @@ const knownDomains = [
   "Project Management",
   "Writing / Editing",
   "Design / Creative",
+  "Insurance",
+  "Government / Public Policy",
+  "Construction / Trades",
+  "Logistics / Supply Chain",
+  "Manufacturing",
+  "Retail / E-commerce",
+  "Nonprofit",
   "Other / Custom",
 ];
 const starterPrompt =
@@ -403,9 +458,9 @@ const appVersion = "0.1.0";
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
+  { id: "import", label: "Import", icon: FileArchive },
   { id: "build", label: "Build", icon: Hammer },
   { id: "use", label: "Use", icon: PlayCircle },
-  { id: "validate", label: "Validate", icon: CheckCircle2 },
   { id: "package-export" as ExtendedSectionId, label: "Package / Export", icon: FolderOutput },
   { id: "install-targets", label: "Install Targets", icon: Plug },
   { id: "settings", label: "Settings", icon: Settings },
@@ -543,6 +598,15 @@ export function App() {
           <div className="panel-label">Current Kit</div>
           <div className="kit-path">{appState.currentKitName || "No kit selected"}</div>
         </div>
+
+        <div className="sidebar-help">
+          <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">
+            Docs
+          </button>
+          <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">
+            Agent Kit Spec
+          </button>
+        </div>
       </aside>
 
       <main className="main">
@@ -552,20 +616,37 @@ export function App() {
             <h1>{activeTitle}</h1>
           </div>
           <div className="current-kit-input">
-            <label htmlFor="current-kit-path">Selected kit path</label>
-            <input
-              id="current-kit-path"
-              onChange={(event) => updateAppState("currentKitPath", event.target.value)}
-              placeholder="C:\\kits\\customer-support-agent"
-              value={appState.currentKitPath}
-            />
+            <label>Selected kit</label>
+            <div>{appState.currentKitName || "No kit selected"}</div>
+            <details className="advanced-details compact-advanced">
+              <summary>Show full path</summary>
+              <input
+                id="current-kit-path"
+                onChange={(event) => updateAppState("currentKitPath", event.target.value)}
+                placeholder="Selected kit path"
+                value={appState.currentKitPath}
+              />
+            </details>
           </div>
         </header>
 
         <section className="content">
           {activeSection === "my-kits" && (
             <MyKitsScreen
+              onBuildWithAI={() => {
+                window.localStorage.setItem("agentkitforge.lastBuildTab", "ai");
+                setActiveSection("build");
+              }}
               onCurrentKitPathChange={(path) => updateAppState("currentKitPath", path)}
+              onGuidedBuilder={() => {
+                window.localStorage.setItem("agentkitforge.lastBuildTab", "guided");
+                setActiveSection("build");
+              }}
+              onImportKit={() => setActiveSection("import")}
+              onInstallKit={(path) => {
+                updateAppState("currentKitPath", path);
+                setActiveSection("install-targets");
+              }}
               onPackageKit={(path) => {
                 updateAppState("currentKitPath", path);
                 setActiveSection("package-export");
@@ -579,6 +660,22 @@ export function App() {
                 updateAppState("currentKitPath", path);
                 setActiveSection("validate");
               }}
+            />
+          )}
+          {activeSection === "import" && (
+            <ImportScreen
+              onKitImported={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+              }}
+              onPackageKit={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+                setActiveSection("package-export");
+              }}
+              onUseKit={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+                setActiveSection("use");
+              }}
+              settings={settings}
             />
           )}
           {activeSection === "build" && (
@@ -648,12 +745,20 @@ export function App() {
 }
 
 function MyKitsScreen({
+  onBuildWithAI,
   onCurrentKitPathChange,
+  onGuidedBuilder,
+  onImportKit,
+  onInstallKit,
   onPackageKit,
   onUseKit,
   onValidateKit,
 }: {
+  onBuildWithAI: () => void;
   onCurrentKitPathChange: (path: string) => void;
+  onGuidedBuilder: () => void;
+  onImportKit: () => void;
+  onInstallKit: (path: string) => void;
   onPackageKit: (path: string) => void;
   onUseKit: (path: string) => void;
   onValidateKit: (path: string) => void;
@@ -662,17 +767,6 @@ function MyKitsScreen({
   const [isLoading, setIsLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [importForm, setImportForm] = useState({
-    packagePath: "",
-    destinationRootFolder: "",
-    force: false,
-    validationProfile: "local-valid" as ValidationProfile,
-  });
-  const [importResult, setImportResult] = useState<ImportAgentKitPackageResult | null>(null);
-  const [importError, setImportError] = useState<string | null>(null);
-  const [isSelectingPackage, setIsSelectingPackage] = useState(false);
-  const [isSelectingDestination, setIsSelectingDestination] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
 
   useEffect(() => {
     loadKits();
@@ -708,95 +802,6 @@ function MyKitsScreen({
       setError(errorToMessage(caughtError));
     } finally {
       setIsAdding(false);
-    }
-  }
-
-  function updateImportForm<Key extends keyof typeof importForm>(
-    key: Key,
-    value: (typeof importForm)[Key],
-  ) {
-    setImportForm((current) => ({ ...current, [key]: value }));
-    setImportResult(null);
-    setImportError(null);
-  }
-
-  async function selectPackageFile() {
-    setIsSelectingPackage(true);
-    setImportError(null);
-
-    try {
-      const selectedPath = await invoke<string | null>("select_agent_kit_package_file");
-      if (selectedPath) {
-        updateImportForm("packagePath", selectedPath);
-      }
-    } catch (caughtError) {
-      setImportError(errorToMessage(caughtError));
-    } finally {
-      setIsSelectingPackage(false);
-    }
-  }
-
-  async function selectDestinationFolder() {
-    setIsSelectingDestination(true);
-    setImportError(null);
-
-    try {
-      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
-      if (selectedPath) {
-        updateImportForm("destinationRootFolder", selectedPath);
-      }
-    } catch (caughtError) {
-      setImportError(errorToMessage(caughtError));
-    } finally {
-      setIsSelectingDestination(false);
-    }
-  }
-
-  async function importPackage() {
-    setIsImporting(true);
-    setImportError(null);
-    setImportResult(null);
-
-    try {
-      if (importForm.packagePath.trim() === "") {
-        throw new Error("Package file is required.");
-      }
-      if (importForm.destinationRootFolder.trim() === "") {
-        throw new Error("Destination folder is required.");
-      }
-
-      const result = await invoke<ImportAgentKitPackageResult>("import_agent_kit_package", {
-        input: importForm,
-      });
-      setImportResult(result);
-      onCurrentKitPathChange(result.extractedPath);
-
-      if (result.validationReport.valid) {
-        await invoke<MyKitEntry>("add_kit_to_library", {
-          input: { path: result.extractedPath, source: "imported" },
-        });
-        await loadKits();
-      }
-    } catch (caughtError) {
-      setImportError(errorToMessage(caughtError));
-    } finally {
-      setIsImporting(false);
-    }
-  }
-
-  async function addInvalidImportAnyway() {
-    if (!importResult) {
-      return;
-    }
-
-    try {
-      await invoke<MyKitEntry>("add_kit_to_library", {
-        input: { path: importResult.extractedPath, source: "imported" },
-      });
-      onCurrentKitPathChange(importResult.extractedPath);
-      await loadKits();
-    } catch (caughtError) {
-      setImportError(errorToMessage(caughtError));
     }
   }
 
@@ -851,32 +856,24 @@ function MyKitsScreen({
   if (kits.length === 0) {
     return (
       <div className="my-kits-screen">
-        <ImportPackagePanel
-          form={importForm}
-          importError={importError}
-          importResult={importResult}
-          isImporting={isImporting}
-          isSelectingDestination={isSelectingDestination}
-          isSelectingPackage={isSelectingPackage}
-          onAddInvalidImportAnyway={addInvalidImportAnyway}
-          onImportPackage={importPackage}
-          onSelectDestinationFolder={selectDestinationFolder}
-          onSelectPackageFile={selectPackageFile}
-          onUpdateForm={updateImportForm}
-        />
         <div className="empty-state">
           <PackageOpen size={42} strokeWidth={1.8} />
-          <h2>No kits added yet</h2>
-          <p>Add existing Agent Kit folders or build a new kit. Local library entries do not move or copy files.</p>
+          <h2>No Agent Kits yet.</h2>
+          <p>Build, import, or add an existing kit to start your local library.</p>
           {error && (
             <div className="error-state" role="alert">
               {error}
             </div>
           )}
-          <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
-            <FolderOpen size={18} />
-            {isAdding ? "Adding" : "Add existing kit folder"}
-          </button>
+          <div className="button-row">
+            <button className="primary-button" onClick={onBuildWithAI} type="button">Build with AI</button>
+            <button className="secondary-button" onClick={onGuidedBuilder} type="button">Guided Builder</button>
+            <button className="secondary-button" onClick={onImportKit} type="button">Import Agent Kit</button>
+          </div>
+          <div className="help-link-row">
+            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Read the docs</button>
+            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+          </div>
         </div>
       </div>
     );
@@ -884,20 +881,11 @@ function MyKitsScreen({
 
   return (
     <div className="my-kits-screen">
-      <ImportPackagePanel
-        form={importForm}
-        importError={importError}
-        importResult={importResult}
-        isImporting={isImporting}
-        isSelectingDestination={isSelectingDestination}
-        isSelectingPackage={isSelectingPackage}
-        onAddInvalidImportAnyway={addInvalidImportAnyway}
-        onImportPackage={importPackage}
-        onSelectDestinationFolder={selectDestinationFolder}
-        onSelectPackageFile={selectPackageFile}
-        onUpdateForm={updateImportForm}
-      />
       <div className="screen-toolbar">
+        <button className="secondary-button" onClick={onImportKit} type="button">
+          <FileArchive size={18} />
+          Import Agent Kit
+        </button>
         <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
           <FolderOpen size={18} />
           {isAdding ? "Adding" : "Add existing kit folder"}
@@ -955,13 +943,16 @@ function MyKitsScreen({
 
             <div className="button-row">
               <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onUseKit(kit.path)} type="button">
-                Use kit
+                Use Kit
               </button>
               <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onValidateKit(kit.path)} type="button">
                 Validate
               </button>
               <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onPackageKit(kit.path)} type="button">
-                Package/export
+                Package / Export
+              </button>
+              <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onInstallKit(kit.path)} type="button">
+                Install Target
               </button>
               <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => openKitFolder(kit.path)} type="button">
                 Open folder
@@ -970,11 +961,200 @@ function MyKitsScreen({
                 Refresh
               </button>
               <button className="secondary-button compact-button" onClick={() => removeKit(kit.path)} type="button">
-                Remove
+                Remove from My Kits
               </button>
             </div>
+            <p className="form-copy compact-state">
+              Remove from My Kits removes this kit from your library list. It does not delete files.
+            </p>
           </article>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ImportScreen({
+  onKitImported,
+  onPackageKit,
+  onUseKit,
+  settings,
+}: {
+  onKitImported: (path: string) => void;
+  onPackageKit: (path: string) => void;
+  onUseKit: (path: string) => void;
+  settings: PublicSettings;
+}) {
+  const [form, setForm] = useState({
+    packagePath: "",
+    destinationRootFolder: appKitsFolder(settings),
+    force: false,
+    validationProfile: settings.preferredValidationProfile,
+  });
+  const [result, setResult] = useState<ImportAgentKitPackageResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isSelectingPackage, setIsSelectingPackage] = useState(false);
+  const [isSelectingDestination, setIsSelectingDestination] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [folderImportError, setFolderImportError] = useState<string | null>(null);
+  const [isAddingFolder, setIsAddingFolder] = useState(false);
+
+  function updateForm<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
+    setForm((current) => ({ ...current, [key]: value }));
+    setResult(null);
+    setError(null);
+  }
+
+  async function selectPackageFile() {
+    setIsSelectingPackage(true);
+    setError(null);
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_package_file");
+      if (selectedPath) {
+        updateForm("packagePath", selectedPath);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingPackage(false);
+    }
+  }
+
+  async function selectDestinationFolder() {
+    setIsSelectingDestination(true);
+    setError(null);
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateForm("destinationRootFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingDestination(false);
+    }
+  }
+
+  async function importPackage() {
+    setIsImporting(true);
+    setError(null);
+    setResult(null);
+    try {
+      if (!form.packagePath.trim()) {
+        throw new Error("Choose a package first.");
+      }
+      if (!form.destinationRootFolder.trim()) {
+        throw new Error("Choose an import destination.");
+      }
+      const importResult = await invoke<ImportAgentKitPackageResult>("import_agent_kit_package", {
+        input: form,
+      });
+      setResult(importResult);
+      onKitImported(importResult.extractedPath);
+
+      if (importResult.validationReport.valid) {
+        await invoke<MyKitEntry>("add_kit_to_library", {
+          input: { path: importResult.extractedPath, source: "imported" },
+        });
+      }
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    } finally {
+      setIsImporting(false);
+    }
+  }
+
+  async function addInvalidImportAnyway() {
+    if (!result) {
+      return;
+    }
+    try {
+      await invoke<MyKitEntry>("add_kit_to_library", {
+        input: { path: result.extractedPath, source: "imported" },
+      });
+      onKitImported(result.extractedPath);
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  async function addFolderImport() {
+    setIsAddingFolder(true);
+    setFolderImportError(null);
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        await invoke<MyKitEntry>("add_kit_to_library", {
+          input: { path: selectedPath, source: "manual" },
+        });
+        onKitImported(selectedPath);
+      }
+    } catch (caughtError) {
+      setFolderImportError(errorToMessage(caughtError));
+    } finally {
+      setIsAddingFolder(false);
+    }
+  }
+
+  async function openImportedFolder() {
+    if (!result) {
+      return;
+    }
+    try {
+      await invoke("open_folder", { path: result.extractedPath });
+    } catch (caughtError) {
+      setError(errorToMessage(caughtError));
+    }
+  }
+
+  return (
+    <div className="import-screen">
+      <div className="tab-list" role="tablist" aria-label="Import options">
+        <button className="tab-button active" type="button">From .agentkit.zip</button>
+        <button className="tab-button" type="button">From Folder</button>
+        <button className="tab-button" disabled type="button">From Agent Kit Market - Coming later</button>
+        <button className="tab-button" disabled type="button">From Organization Repository - Coming later</button>
+      </div>
+
+      <div className="build-layout">
+        <ImportPackagePanel
+          form={form}
+          importError={error}
+          importResult={result}
+          isImporting={isImporting}
+          isSelectingDestination={isSelectingDestination}
+          isSelectingPackage={isSelectingPackage}
+          onAddInvalidImportAnyway={addInvalidImportAnyway}
+          onImportPackage={importPackage}
+          onOpenImportedFolder={openImportedFolder}
+          onPackageKit={onPackageKit}
+          onSelectDestinationFolder={selectDestinationFolder}
+          onSelectPackageFile={selectPackageFile}
+          onUpdateForm={updateForm}
+          onUseKit={onUseKit}
+        />
+
+        <div className="results-panel">
+          <div className="panel-label">Other Import Options</div>
+          <div className="empty-state compact-empty">
+            <FolderOpen size={34} strokeWidth={1.8} />
+            <h2>From Folder</h2>
+            <p>Add an existing Agent Kit folder to My Kits without copying or moving it.</p>
+            <button className="secondary-button" disabled={isAddingFolder} onClick={addFolderImport} type="button">
+              {isAddingFolder ? "Adding" : "Add existing kit..."}
+            </button>
+            {folderImportError && <div className="error-state" role="alert">{folderImportError}</div>}
+          </div>
+          <div className="empty-state compact-empty">
+            <PackageOpen size={34} strokeWidth={1.8} />
+            <h2>Coming later</h2>
+            <p>Agent Kit Market and organization repository imports are placeholders for a later release.</p>
+          </div>
+          <div className="help-link-row">
+            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
+            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -989,9 +1169,12 @@ function ImportPackagePanel({
   isSelectingPackage,
   onAddInvalidImportAnyway,
   onImportPackage,
+  onOpenImportedFolder,
+  onPackageKit,
   onSelectDestinationFolder,
   onSelectPackageFile,
   onUpdateForm,
+  onUseKit,
 }: {
   form: {
     packagePath: string;
@@ -1006,54 +1189,56 @@ function ImportPackagePanel({
   isSelectingPackage: boolean;
   onAddInvalidImportAnyway: () => void;
   onImportPackage: () => void;
+  onOpenImportedFolder: () => void;
+  onPackageKit: (path: string) => void;
   onSelectDestinationFolder: () => void;
   onSelectPackageFile: () => void;
   onUpdateForm: <Key extends keyof ImportPackagePanelProps["form"]>(
     key: Key,
     value: ImportPackagePanelProps["form"][Key],
   ) => void;
+  onUseKit: (path: string) => void;
 }) {
   return (
     <div className="form-panel import-panel">
       <h2>Import .agentkit.zip</h2>
+      <p className="form-copy">Bring in a portable Agent Kit package, validate it, and add it to My Kits.</p>
 
-      <label htmlFor="import-package-file">Package file</label>
-      <div className="path-picker">
+      <LabelWithHelp htmlFor="import-package-file" label="Package file" help="Choose the .agentkit.zip file you received or exported." />
+      <div className="friendly-location-row">
+        <span>Selected package: {form.packagePath ? friendlyFileName(form.packagePath) : "None selected"}</span>
+        <button className="secondary-button compact-button" disabled={isSelectingPackage || isImporting} onClick={onSelectPackageFile} type="button">
+          <FileArchive size={18} />
+          Choose package
+        </button>
+      </div>
+      <details className="advanced-details">
+        <summary>Show full path</summary>
         <input
           id="import-package-file"
           onChange={(event) => onUpdateForm("packagePath", event.target.value)}
-          placeholder="C:\\kits\\downloads\\example.agentkit.zip"
+          placeholder="Full package path"
           value={form.packagePath}
         />
-        <button
-          className="icon-button"
-          disabled={isSelectingPackage || isImporting}
-          onClick={onSelectPackageFile}
-          title="Select package"
-          type="button"
-        >
-          <FileArchive size={18} />
+      </details>
+
+      <LabelWithHelp htmlFor="import-destination-folder" label="Destination" help="Imported kits are extracted into the AgentKitForge Library by default." />
+      <div className="friendly-location-row">
+        <span>Destination: {isDefaultKitsFolder(form.destinationRootFolder) ? "AgentKitForge Library" : friendlyLocation(form.destinationRootFolder)}</span>
+        <button className="secondary-button compact-button" disabled={isSelectingDestination || isImporting} onClick={onSelectDestinationFolder} type="button">
+          <FolderOpen size={18} />
+          Change destination
         </button>
       </div>
-
-      <label htmlFor="import-destination-folder">Destination root folder</label>
-      <div className="path-picker">
+      <details className="advanced-details">
+        <summary>Show folder path</summary>
         <input
           id="import-destination-folder"
           onChange={(event) => onUpdateForm("destinationRootFolder", event.target.value)}
-          placeholder="C:\\kits\\imported"
+          placeholder="Full destination folder path"
           value={form.destinationRootFolder}
         />
-        <button
-          className="icon-button"
-          disabled={isSelectingDestination || isImporting}
-          onClick={onSelectDestinationFolder}
-          title="Select destination folder"
-          type="button"
-        >
-          <FolderOpen size={18} />
-        </button>
-      </div>
+      </details>
 
       <label htmlFor="import-validation-profile">Validation profile</label>
       <select
@@ -1097,12 +1282,20 @@ function ImportPackagePanel({
           </div>
           <dl className="report-meta">
             <div>
-              <dt>Imported location</dt>
-              <dd>{friendlyLocation(importResult.extractedPath)}</dd>
-            </div>
-            <div>
               <dt>Kit</dt>
               <dd>{importResult.metadata.name} {importResult.metadata.version}</dd>
+            </div>
+            <div>
+              <dt>Validation</dt>
+              <dd>{importResult.validationReport.valid ? "Valid" : "Needs review"}</dd>
+            </div>
+            <div>
+              <dt>My Kits</dt>
+              <dd>{importResult.validationReport.valid ? "Added automatically" : "Not added automatically"}</dd>
+            </div>
+            <div>
+              <dt>Location</dt>
+              <dd>{friendlyLocation(importResult.extractedPath)}</dd>
             </div>
           </dl>
           <details className="advanced-details">
@@ -1122,14 +1315,21 @@ function ImportPackagePanel({
               </button>
             </>
           )}
-          <div className="created-files">
-            <h3>Extracted files</h3>
-            <ul>
-              {importResult.files.map((file) => (
-                <li key={file}>{file}</li>
-              ))}
-            </ul>
+          <div className="button-row">
+            <button className="primary-button compact-button" disabled={!importResult.validationReport.valid} onClick={() => onUseKit(importResult.extractedPath)} type="button">Use Kit</button>
+            <button className="secondary-button compact-button" onClick={() => onPackageKit(importResult.extractedPath)} type="button">Package / Export</button>
+            <button className="secondary-button compact-button" onClick={onOpenImportedFolder} type="button">Open Folder</button>
           </div>
+          <details className="advanced-details">
+            <summary>Extracted files</summary>
+            <div className="created-files">
+              <ul>
+                {importResult.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            </div>
+          </details>
         </div>
       )}
     </div>
@@ -1198,6 +1398,8 @@ function BuildScreen({
   });
   const [aiResult, setAiResult] = useState<GenerateAgentKitDraftResult | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [draftChangeRequest, setDraftChangeRequest] = useState("");
+  const [isRevisingDraft, setIsRevisingDraft] = useState(false);
   const [aiFieldErrors, setAiFieldErrors] = useState<
     Partial<Record<keyof GenerateAgentKitDraftInput | "apiKey", string>>
   >({});
@@ -1287,7 +1489,7 @@ function BuildScreen({
     }));
   }
 
-  function updateGuidedGuardrail(index: number, text: string) {
+  function updateGuidedPolicy(index: number, text: string) {
     setGuidedForm((current) => ({
       ...current,
       guardrails: current.guardrails.map((guardrail, guardrailIndex) =>
@@ -1296,7 +1498,7 @@ function BuildScreen({
     }));
   }
 
-  function addGuidedGuardrail(text = "") {
+  function addGuidedPolicy(text = "") {
     setGuidedForm((current) => ({
       ...current,
       guardrails: [
@@ -1306,7 +1508,7 @@ function BuildScreen({
     }));
   }
 
-  function removeGuidedGuardrail(index: number) {
+  function removeGuidedPolicy(index: number) {
     setGuidedForm((current) => ({
       ...current,
       guardrails: current.guardrails.filter((_, guardrailIndex) => guardrailIndex !== index),
@@ -1314,39 +1516,106 @@ function BuildScreen({
   }
 
   function addDomainGuardrailPreset() {
-    const preset = guardrailPresetForDomain(guidedForm.domain);
-    if (preset) {
-      addGuidedGuardrail(preset);
+    const presets = policyPresetsForDomain(guidedForm.domain);
+    if (presets.length > 0) {
+      setGuidedForm((current) => ({
+        ...current,
+        guardrails: [
+          ...current.guardrails,
+          ...presets.map((text, index) => ({
+            id: `policy-${current.guardrails.length + index + 1}`,
+            text,
+          })),
+        ],
+      }));
     }
   }
 
-  function updateGuidedRequiredInput(index: number, patch: Partial<GuidedRequiredInput>) {
+  function updateGuidedPreparedPrompt(index: number, patch: Partial<GuidedPreparedPrompt>) {
     setGuidedForm((current) => ({
       ...current,
-      requiredInputs: current.requiredInputs.map((input, inputIndex) => {
-        if (inputIndex !== index) {
-          return input;
+      preparedPrompts: current.preparedPrompts.map((prompt, promptIndex) => {
+        if (promptIndex !== index) {
+          return prompt;
         }
-        const next = { ...input, ...patch };
-        if (patch.label && (input.id.trim() === "" || input.id === slugify(input.label))) {
-          next.id = slugify(patch.label);
+        const next = { ...prompt, ...patch };
+        if (patch.name && (prompt.id.trim() === "" || prompt.id === slugify(prompt.name))) {
+          next.id = slugify(patch.name);
         }
         return next;
       }),
     }));
   }
 
-  function addGuidedRequiredInput() {
+  function addGuidedPreparedPrompt() {
     setGuidedForm((current) => ({
       ...current,
-      requiredInputs: [...current.requiredInputs, createDefaultRequiredInput(current.requiredInputs.length + 1)],
+      preparedPrompts: [
+        ...current.preparedPrompts,
+        createDefaultGuidedPrompt(current.preparedPrompts.length + 1),
+      ],
     }));
   }
 
-  function removeGuidedRequiredInput(index: number) {
+  function removeGuidedPreparedPrompt(index: number) {
     setGuidedForm((current) => ({
       ...current,
-      requiredInputs: current.requiredInputs.filter((_, inputIndex) => inputIndex !== index),
+      preparedPrompts:
+        current.preparedPrompts.length > 1
+          ? current.preparedPrompts.filter((_, promptIndex) => promptIndex !== index)
+          : current.preparedPrompts,
+    }));
+  }
+
+  function updateGuidedPromptInput(promptIndex: number, inputIndex: number, patch: Partial<GuidedRequiredInput>) {
+    setGuidedForm((current) => ({
+      ...current,
+      preparedPrompts: current.preparedPrompts.map((prompt, currentPromptIndex) => {
+        if (currentPromptIndex !== promptIndex) {
+          return prompt;
+        }
+        return {
+          ...prompt,
+          inputs: prompt.inputs.map((input, currentInputIndex) => {
+            if (currentInputIndex !== inputIndex) {
+              return input;
+            }
+            const next = { ...input, ...patch };
+            if (patch.label && (input.id.trim() === "" || input.id === promptInputId(input.label))) {
+              next.id = promptInputId(patch.label);
+            }
+            return next;
+          }),
+        };
+      }),
+    }));
+  }
+
+  function addGuidedPromptInput(promptIndex: number, seed?: Partial<GuidedRequiredInput>) {
+    setGuidedForm((current) => ({
+      ...current,
+      preparedPrompts: current.preparedPrompts.map((prompt, currentPromptIndex) =>
+        currentPromptIndex === promptIndex
+          ? {
+              ...prompt,
+              inputs: [
+                ...prompt.inputs,
+                { ...createDefaultRequiredInput(prompt.inputs.length + 1), ...seed },
+              ],
+            }
+          : prompt,
+      ),
+    }));
+  }
+
+  function removeGuidedPromptInput(promptIndex: number, inputIndex: number) {
+    setGuidedForm((current) => ({
+      ...current,
+      preparedPrompts: current.preparedPrompts.map((prompt, currentPromptIndex) =>
+        currentPromptIndex === promptIndex
+          ? { ...prompt, inputs: prompt.inputs.filter((_, currentInputIndex) => currentInputIndex !== inputIndex) }
+          : prompt,
+      ),
     }));
   }
 
@@ -1615,11 +1884,93 @@ function BuildScreen({
         { input: aiForm },
       );
       setAiResult(result);
+      setDraftChangeRequest("");
     } catch (caughtError) {
       setAiError(errorToMessage(caughtError));
     } finally {
       setIsGeneratingDraft(false);
     }
+  }
+
+  async function requestDraftChanges() {
+    if (!aiResult?.session) {
+      setAiError("Generate an initial draft before requesting changes.");
+      return;
+    }
+
+    if (!draftChangeRequest.trim()) {
+      setAiError("Change request is required.");
+      return;
+    }
+
+    setIsRevisingDraft(true);
+    setAiError(null);
+    setGeneratedRenderResult(null);
+    setGeneratedRenderError(null);
+
+    try {
+      const input: ReviseAgentKitDraftInput = {
+        session: aiResult.session,
+        changeRequest: draftChangeRequest,
+        desiredValidationLevel: aiForm.desiredValidationLevel,
+        constraints: aiForm.constraints,
+        sourceNotes: aiForm.sourceNotes,
+        providerId: aiForm.providerId,
+        model: aiForm.model,
+      };
+      const result = await invoke<GenerateAgentKitDraftResult>("revise_agent_kit_draft_with_ai", {
+        input,
+      });
+      setAiResult(result);
+      setDraftChangeRequest("");
+      setDraftCopyState("idle");
+      setDraftSavePath(null);
+    } catch (caughtError) {
+      setAiError(errorToMessage(caughtError));
+    } finally {
+      setIsRevisingDraft(false);
+    }
+  }
+
+  function restoreDraftRevision(revisionId: string) {
+    if (!aiResult?.session) {
+      return;
+    }
+
+    const revision = aiResult.session.revisions.find((entry) => entry.id === revisionId);
+    if (!revision) {
+      setAiError("Draft revision was not found.");
+      return;
+    }
+
+    const session = {
+      ...aiResult.session,
+      currentRevisionId: revisionId,
+      updatedAt: new Date().toISOString(),
+    };
+    setAiResult({
+      ...aiResult,
+      draftJson: revision.draft,
+      draftJsonPretty: `${JSON.stringify(revision.draft, null, 2)}\n`,
+      warnings: revision.warnings ?? [],
+      providerName: revision.provider ?? aiResult.providerName,
+      model: revision.model ?? aiResult.model,
+      session,
+      currentRevision: revision,
+    });
+    setAiError(null);
+    setGeneratedRenderResult(null);
+    setGeneratedRenderError(null);
+  }
+
+  function clearDraftSession() {
+    setAiResult(null);
+    setAiError(null);
+    setDraftChangeRequest("");
+    setDraftCopyState("idle");
+    setDraftSavePath(null);
+    setGeneratedRenderResult(null);
+    setGeneratedRenderError(null);
   }
 
   async function copyGeneratedDraftJson() {
@@ -1729,6 +2080,10 @@ function BuildScreen({
       <div className="build-layout">
         <div className="form-panel">
           <h2>Build with AI</h2>
+          <div className="help-link-row">
+            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Build docs</button>
+            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+          </div>
 
           {settings.aiProviders.length === 0 && (
             <div className="inline-warning">Add an AI provider in Settings before generating drafts.</div>
@@ -1871,11 +2226,17 @@ function BuildScreen({
           <div className="panel-label">Generated Draft</div>
           <GeneratedDraftResults
             copyState={draftCopyState}
+            changeRequest={draftChangeRequest}
             error={aiError}
             isLoading={isGeneratingDraft}
+            isRevising={isRevisingDraft}
+            onChangeRequestChange={setDraftChangeRequest}
+            onClearSession={clearDraftSession}
             onCopyJson={copyGeneratedDraftJson}
             onRenderDraft={renderGeneratedDraft}
+            onRequestChanges={requestDraftChanges}
             onSaveJson={saveGeneratedDraftJson}
+            onRestoreRevision={restoreDraftRevision}
             result={aiResult}
             savePath={draftSavePath}
             renderOutputFolder={generatedRenderOutputFolder}
@@ -1904,23 +2265,26 @@ function BuildScreen({
           isCreating={isCreatingGuidedKit}
           isSelectingOutput={isSelectingGuidedOutput}
           onAddExample={addGuidedExample}
-          onAddGuardrail={() => addGuidedGuardrail()}
-          onAddInput={addGuidedRequiredInput}
+          onAddPolicy={() => addGuidedPolicy()}
+          onAddPrompt={addGuidedPreparedPrompt}
+          onAddPromptInput={addGuidedPromptInput}
           onAddSkill={addGuidedSkill}
           onApplyPreset={addDomainGuardrailPreset}
           onCreate={createGuidedKit}
           onOpenFolder={openGuidedFolder}
           onPackageKit={onPackageKit}
           onRemoveExample={removeGuidedExample}
-          onRemoveGuardrail={removeGuidedGuardrail}
-          onRemoveInput={removeGuidedRequiredInput}
+          onRemovePolicy={removeGuidedPolicy}
+          onRemovePrompt={removeGuidedPreparedPrompt}
+          onRemovePromptInput={removeGuidedPromptInput}
           onRemoveSkill={removeGuidedSkill}
           onSelectOutput={selectGuidedOutputFolder}
           onStepChange={setGuidedStep}
           onUpdate={updateGuidedForm}
           onUpdateExample={updateGuidedExample}
-          onUpdateGuardrail={updateGuidedGuardrail}
-          onUpdateInput={updateGuidedRequiredInput}
+          onUpdatePolicy={updateGuidedPolicy}
+          onUpdatePrompt={updateGuidedPreparedPrompt}
+          onUpdatePromptInput={updateGuidedPromptInput}
           onUpdateName={updateGuidedName}
           onUpdateSkill={updateGuidedSkill}
           onUseKit={onUseKit}
@@ -2125,23 +2489,26 @@ function GuidedBuilder({
   isCreating,
   isSelectingOutput,
   onAddExample,
-  onAddGuardrail,
-  onAddInput,
+  onAddPolicy,
+  onAddPrompt,
+  onAddPromptInput,
   onAddSkill,
   onApplyPreset,
   onCreate,
   onOpenFolder,
   onPackageKit,
   onRemoveExample,
-  onRemoveGuardrail,
-  onRemoveInput,
+  onRemovePolicy,
+  onRemovePrompt,
+  onRemovePromptInput,
   onRemoveSkill,
   onSelectOutput,
   onStepChange,
   onUpdate,
   onUpdateExample,
-  onUpdateGuardrail,
-  onUpdateInput,
+  onUpdatePolicy,
+  onUpdatePrompt,
+  onUpdatePromptInput,
   onUpdateName,
   onUpdateSkill,
   onUseKit,
@@ -2155,23 +2522,26 @@ function GuidedBuilder({
   isCreating: boolean;
   isSelectingOutput: boolean;
   onAddExample: () => void;
-  onAddGuardrail: () => void;
-  onAddInput: () => void;
+  onAddPolicy: () => void;
+  onAddPrompt: () => void;
+  onAddPromptInput: (promptIndex: number, seed?: Partial<GuidedRequiredInput>) => void;
   onAddSkill: () => void;
   onApplyPreset: () => void;
   onCreate: (mode: "create" | "validate" | "validate-add") => void;
   onOpenFolder: () => void;
   onPackageKit: (rootPath: string) => void;
   onRemoveExample: (index: number) => void;
-  onRemoveGuardrail: (index: number) => void;
-  onRemoveInput: (index: number) => void;
+  onRemovePolicy: (index: number) => void;
+  onRemovePrompt: (index: number) => void;
+  onRemovePromptInput: (promptIndex: number, inputIndex: number) => void;
   onRemoveSkill: (index: number) => void;
   onSelectOutput: () => void;
   onStepChange: (step: GuidedBuilderStep) => void;
   onUpdate: <Key extends keyof GuidedBuilderState>(key: Key, value: GuidedBuilderState[Key]) => void;
   onUpdateExample: (index: number, patch: Partial<GuidedExample>) => void;
-  onUpdateGuardrail: (index: number, text: string) => void;
-  onUpdateInput: (index: number, patch: Partial<GuidedRequiredInput>) => void;
+  onUpdatePolicy: (index: number, text: string) => void;
+  onUpdatePrompt: (index: number, patch: Partial<GuidedPreparedPrompt>) => void;
+  onUpdatePromptInput: (promptIndex: number, inputIndex: number, patch: Partial<GuidedRequiredInput>) => void;
   onUpdateName: (name: string) => void;
   onUpdateSkill: (index: number, patch: Partial<GuidedSkill>) => void;
   onUseKit: (rootPath: string) => void;
@@ -2202,6 +2572,11 @@ function GuidedBuilder({
 
       <div className="build-layout">
         <div className="form-panel guided-builder-panel">
+          <div className="guided-requirements-summary">
+            <strong>Required:</strong> Basics, at least one Skill, and at least one Prepared Prompt.
+            <span>Optional: Policies, Templates, and Examples.</span>
+          </div>
+
           {step === "basics" && (
             <>
               <h2>Basics</h2>
@@ -2229,12 +2604,21 @@ function GuidedBuilder({
               </select>
 
               <LabelWithHelp htmlFor="guided-output-folder" label="Save location" help="Defaults to your AgentKitForge Kits folder. You can choose another folder." />
-              <div className="path-picker">
-                <input id="guided-output-folder" onChange={(event) => onUpdate("outputFolder", event.target.value)} value={form.outputFolder} />
-                <button className="icon-button" disabled={isSelectingOutput || isCreating} onClick={onSelectOutput} title="Select save location" type="button">
-                  <FolderOpen size={18} />
+              <div className="friendly-location-row">
+                <span>Save to: {form.outputFolder ? "AgentKitForge Library" : "Choose a save location"}</span>
+                <button className="secondary-button compact-button" disabled={isSelectingOutput || isCreating} onClick={onSelectOutput} type="button">
+                  Change location
                 </button>
               </div>
+              <details className="advanced-details">
+                <summary>Advanced: Show folder path</summary>
+                <div className="path-picker">
+                  <input id="guided-output-folder" onChange={(event) => onUpdate("outputFolder", event.target.value)} value={form.outputFolder} />
+                  <button className="icon-button" disabled={isSelectingOutput || isCreating} onClick={onSelectOutput} title="Select save location" type="button">
+                    <FolderOpen size={18} />
+                  </button>
+                </div>
+              </details>
             </>
           )}
 
@@ -2279,20 +2663,24 @@ function GuidedBuilder({
             </>
           )}
 
-          {step === "guardrails" && (
+          {step === "policies" && (
             <>
               <div className="panel-heading">
-                <h2>Guardrails</h2>
+                <h2>Policies <span className="metadata-pill">Optional</span></h2>
                 <div className="button-row">
                   <button className="secondary-button compact-button" onClick={onApplyPreset} type="button">Add domain preset</button>
-                  <button className="secondary-button compact-button" onClick={onAddGuardrail} type="button">Add custom</button>
+                  <button className="secondary-button compact-button" onClick={onAddPolicy} type="button">Add policy</button>
                 </div>
               </div>
-              {form.guardrails.length === 0 && <p className="state-copy">Add guardrails to help users understand boundaries and review expectations.</p>}
+              <p className="form-copy">Policies are guardrails that tell the AI what to avoid, require, or escalate.</p>
+              {isRiskyGuidedDomain(form.domain) && form.guardrails.length === 0 && (
+                <div className="inline-warning">This domain often benefits from policies. Add a preset or custom policy before sharing the kit.</div>
+              )}
+              {form.guardrails.length === 0 && <p className="state-copy">You can skip this step and create the kit without policies.</p>}
               {form.guardrails.map((guardrail, index) => (
                 <div className="guided-list-row" key={`${guardrail.id}-${index}`}>
-                  <textarea onChange={(event) => onUpdateGuardrail(index, event.target.value)} rows={2} value={guardrail.text} />
-                  <button className="secondary-button compact-button" onClick={() => onRemoveGuardrail(index)} type="button">Remove</button>
+                  <textarea onChange={(event) => onUpdatePolicy(index, event.target.value)} rows={2} value={guardrail.text} />
+                  <button className="secondary-button compact-button" onClick={() => onRemovePolicy(index)} type="button">Remove</button>
                 </div>
               ))}
             </>
@@ -2300,7 +2688,7 @@ function GuidedBuilder({
 
           {step === "outputs" && (
             <>
-              <h2>Outputs/Templates</h2>
+              <h2>Outputs / Templates <span className="metadata-pill">Optional</span></h2>
               <LabelWithHelp htmlFor="guided-output-sections" label="Expected output sections" help="List the sections users should usually receive." />
               <textarea id="guided-output-sections" onChange={(event) => onUpdate("outputSections", event.target.value)} rows={4} value={form.outputSections} />
               <label>Optional output template</label>
@@ -2316,50 +2704,26 @@ function GuidedBuilder({
             </>
           )}
 
-          {step === "inputs" && (
+          {step === "prompts" && (
             <>
               <div className="panel-heading">
-                <h2>Required Inputs</h2>
-                <button className="secondary-button compact-button" onClick={onAddInput} type="button">Add input</button>
+                <h2>Prepared Prompts</h2>
+                <button className="secondary-button compact-button" onClick={onAddPrompt} type="button">Add prompt</button>
               </div>
-              <p className="form-copy">These fields tell AgentKitForge what users should provide before running the kit.</p>
-              {form.requiredInputs.map((input, index) => (
-                <article className="guided-card" key={`${input.id}-${index}`}>
+              <p className="form-copy">Prepared Prompts are reusable prompt templates that users can run later in Use mode. At least one is required.</p>
+              {form.preparedPrompts.map((prompt, index) => (
+                <article className="guided-card" key={`${prompt.id}-${index}`}>
                   <div className="panel-heading">
-                    <h3>Input {index + 1}</h3>
-                    <button className="secondary-button compact-button" onClick={() => onRemoveInput(index)} type="button">Remove</button>
+                    <h3>Prepared Prompt {index + 1}</h3>
+                    <button className="secondary-button compact-button" disabled={form.preparedPrompts.length === 1} onClick={() => onRemovePrompt(index)} type="button">Remove</button>
                   </div>
-                  <label>Label</label>
-                  <input onChange={(event) => onUpdateInput(index, { label: event.target.value })} value={input.label} />
-                  <label>Description/help text</label>
-                  <input onChange={(event) => onUpdateInput(index, { description: event.target.value })} value={input.description} />
-                  <div className="settings-grid two-column">
-                    <label className="checkbox-row">
-                      <input checked={input.required} onChange={(event) => onUpdateInput(index, { required: event.target.checked })} type="checkbox" />
-                      <span>Required</span>
-                    </label>
-                    <label className="checkbox-row">
-                      <input checked={input.includeInPrompt} onChange={(event) => onUpdateInput(index, { includeInPrompt: event.target.checked })} type="checkbox" />
-                      <span>Include in prompt</span>
-                    </label>
-                  </div>
-                  <label>Input type</label>
-                  <select onChange={(event) => onUpdateInput(index, { inputType: event.target.value as GuidedRequiredInput["inputType"] })} value={input.inputType}>
-                    <option value="short-text">short text</option>
-                    <option value="long-text">long text</option>
-                    <option value="choice">choice</option>
-                    <option value="multi-choice">multi-choice</option>
-                    <option value="date">date</option>
-                    <option value="number">number</option>
-                  </select>
-                  <label>Placeholder/example</label>
-                  <input onChange={(event) => onUpdateInput(index, { placeholder: event.target.value })} value={input.placeholder} />
-                  {(input.inputType === "choice" || input.inputType === "multi-choice") && (
-                    <>
-                      <label>Choices</label>
-                      <textarea onChange={(event) => onUpdateInput(index, { choices: event.target.value })} placeholder="One option per line" rows={3} value={input.choices} />
-                    </>
-                  )}
+                  <GuidedPromptEditor
+                    onAddInput={(seed) => onAddPromptInput(index, seed)}
+                    onRemoveInput={(inputIndex) => onRemovePromptInput(index, inputIndex)}
+                    onUpdate={(patch) => onUpdatePrompt(index, patch)}
+                    onUpdateInput={(inputIndex, patch) => onUpdatePromptInput(index, inputIndex, patch)}
+                    prompt={prompt}
+                  />
                 </article>
               ))}
             </>
@@ -2368,19 +2732,27 @@ function GuidedBuilder({
           {step === "examples" && (
             <>
               <div className="panel-heading">
-                <h2>Examples</h2>
+                <h2>Examples <span className="metadata-pill">Optional</span></h2>
                 <button className="secondary-button compact-button" onClick={onAddExample} type="button">Add example</button>
               </div>
+              <p className="form-copy">Examples show users and AI tools what good prompts and outputs look like. They help with sharing, testing, and future marketplace listings.</p>
               {form.examples.map((example, index) => (
                 <article className="guided-card" key={`${example.id}-${index}`}>
                   <div className="panel-heading">
                     <h3>Example {index + 1}</h3>
                     <button className="secondary-button compact-button" onClick={() => onRemoveExample(index)} type="button">Remove</button>
                   </div>
+                  <label>Prepared prompt</label>
+                  <select onChange={(event) => onUpdateExample(index, { promptId: event.target.value })} value={example.promptId}>
+                    <option value="">Not tied to a prompt</option>
+                    {form.preparedPrompts.map((prompt) => (
+                      <option key={prompt.id} value={prompt.id}>{prompt.name || prompt.id}</option>
+                    ))}
+                  </select>
                   <label>Example prompt</label>
                   <textarea onChange={(event) => onUpdateExample(index, { prompt: event.target.value })} rows={4} value={example.prompt} />
-                  <label>Required input examples</label>
-                  <textarea onChange={(event) => onUpdateExample(index, { requiredInputExamples: event.target.value })} rows={3} value={example.requiredInputExamples} />
+                  <label>Example input values</label>
+                  <textarea onChange={(event) => onUpdateExample(index, { inputExamples: event.target.value })} rows={3} value={example.inputExamples} />
                   <label>Expected output example</label>
                   <textarea onChange={(event) => onUpdateExample(index, { output: event.target.value })} rows={5} value={example.output} />
                 </article>
@@ -2462,13 +2834,181 @@ function GuidedReviewSummary({ form }: { form: GuidedBuilderState }) {
       <div><dt>Domain</dt><dd>{form.domain || "Not selected"}</dd></div>
       <div><dt>Target users</dt><dd>{form.targetUsers || "Not specified"}</dd></div>
       <div><dt>Skills</dt><dd>{form.skills.length}</dd></div>
-      <div><dt>Guardrails</dt><dd>{form.guardrails.filter((item) => item.text.trim()).length}</dd></div>
-      <div><dt>Required inputs</dt><dd>{form.requiredInputs.length}</dd></div>
+      <div><dt>Policies</dt><dd>{form.guardrails.filter((item) => item.text.trim()).length}</dd></div>
+      <div><dt>Prepared Prompts</dt><dd>{form.preparedPrompts.filter((prompt) => prompt.name.trim()).length}</dd></div>
+      <div><dt>Prompt inputs</dt><dd>{form.preparedPrompts.reduce((total, prompt) => total + prompt.inputs.filter((input) => input.label.trim()).length, 0)}</dd></div>
+      <div><dt>Templates/outputs</dt><dd>{form.outputTemplate.trim() || form.outputSections.trim() ? "Configured" : "Not configured"}</dd></div>
       <div><dt>Examples</dt><dd>{form.examples.filter((example) => example.prompt.trim()).length}</dd></div>
       <div><dt>Validation target</dt><dd>{guidedDefaultValidationProfile(form)}</dd></div>
       <div><dt>Save location</dt><dd>{friendlyLocation(guidedTargetOutputFolder(form))}</dd></div>
-      <div><dt>Download behavior</dt><dd>{form.documentLike ? `Document-like output, suggested name ${form.downloadFileName || "kit-output"}` : "Standard response output"}</dd></div>
+      <div><dt>Document-like outputs</dt><dd>{form.preparedPrompts.some((prompt) => prompt.documentLikeOutput) || form.documentLike ? "Yes" : "No"}</dd></div>
     </dl>
+  );
+}
+
+function GuidedPromptEditor({
+  onAddInput,
+  onRemoveInput,
+  onUpdate,
+  onUpdateInput,
+  prompt,
+}: {
+  onAddInput: (seed?: Partial<GuidedRequiredInput>) => void;
+  onRemoveInput: (index: number) => void;
+  onUpdate: (patch: Partial<GuidedPreparedPrompt>) => void;
+  onUpdateInput: (index: number, patch: Partial<GuidedRequiredInput>) => void;
+  prompt: GuidedPreparedPrompt;
+}) {
+  const placeholders = extractPromptVariables(prompt.template);
+  const missingInputs = placeholders.filter((placeholder) =>
+    !prompt.inputs.some((input) => input.id === placeholder),
+  );
+  const preview = renderGuidedPromptPreview(prompt);
+
+  return (
+    <>
+      <LabelWithHelp htmlFor={`prompt-name-${prompt.id}`} label="Prompt name" help="A friendly name users will choose in Use mode." />
+      <input id={`prompt-name-${prompt.id}`} onChange={(event) => onUpdate({ name: event.target.value })} placeholder="Review workbook" value={prompt.name} />
+
+      <details className="advanced-details">
+        <summary>Advanced: Prompt ID</summary>
+        <input onChange={(event) => onUpdate({ id: slugify(event.target.value) })} value={prompt.id} />
+      </details>
+
+      <LabelWithHelp htmlFor={`prompt-description-${prompt.id}`} label="Description" help="Explain when someone should use this prepared prompt." />
+      <input id={`prompt-description-${prompt.id}`} onChange={(event) => onUpdate({ description: event.target.value })} value={prompt.description} />
+
+      <LabelWithHelp htmlFor={`prompt-template-${prompt.id}`} label="Prompt template" help="Use variables in double braces, like {{company_name}} or {{reporting_period}}." />
+      <textarea
+        id={`prompt-template-${prompt.id}`}
+        onChange={(event) => onUpdate({ template: event.target.value })}
+        placeholder="Review {{company_name}}'s workbook for {{reporting_period}}. Focus on {{review_focus}} and produce a {{output_style}} summary."
+        rows={5}
+        value={prompt.template}
+      />
+
+      {missingInputs.length > 0 && (
+        <div className="inline-warning">
+          Add inputs for: {missingInputs.join(", ")}
+          <div className="button-row">
+            {missingInputs.map((placeholder) => (
+              <button
+                className="secondary-button compact-button"
+                key={placeholder}
+                onClick={() =>
+                  onAddInput({
+                    id: placeholder,
+                    label: titleCaseFromId(placeholder),
+                    placeholder: titleCaseFromId(placeholder),
+                  })
+                }
+                type="button"
+              >
+                Add {titleCaseFromId(placeholder)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="settings-grid two-column">
+        <div>
+          <LabelWithHelp htmlFor={`prompt-output-${prompt.id}`} label="Output mode" help="Choose the kind of response this prompt usually produces." />
+          <select id={`prompt-output-${prompt.id}`} onChange={(event) => onUpdate({ outputMode: event.target.value as GuidedPreparedPrompt["outputMode"] })} value={prompt.outputMode}>
+            <option value="text">text</option>
+            <option value="markdown">markdown</option>
+            <option value="document">document</option>
+          </select>
+        </div>
+        <label className="checkbox-row">
+          <input checked={prompt.documentLikeOutput} onChange={(event) => onUpdate({ documentLikeOutput: event.target.checked })} type="checkbox" />
+          <span>Document-like output</span>
+          <HelpTip text="When enabled, Use mode emphasizes Markdown download for this prompt." />
+        </label>
+      </div>
+
+      <LabelWithHelp htmlFor={`prompt-filename-${prompt.id}`} label="Suggested output filename" help="Optional filename users will see when downloading this prompt's result." />
+      <input id={`prompt-filename-${prompt.id}`} onChange={(event) => onUpdate({ suggestedFileName: event.target.value })} placeholder="client-memo.md" value={prompt.suggestedFileName} />
+
+      <label>Tags</label>
+      <input onChange={(event) => onUpdate({ tags: event.target.value })} placeholder="memo, review, client-facing" value={prompt.tags} />
+
+      <div className="panel-heading">
+        <h3>Inputs / variables</h3>
+        <button className="secondary-button compact-button" onClick={() => onAddInput()} type="button">Add input</button>
+      </div>
+      {prompt.inputs.length === 0 && <p className="state-copy compact-state">Add inputs for each variable users should fill in before running.</p>}
+      {prompt.inputs.map((input, index) => (
+        <GuidedPromptInputEditor
+          input={input}
+          key={`${input.id}-${index}`}
+          onRemove={() => onRemoveInput(index)}
+          onUpdate={(patch) => onUpdateInput(index, patch)}
+        />
+      ))}
+
+      <details className="context-details" open>
+        <summary>Prompt preview</summary>
+        <pre className="json-panel">{preview || "Add a prompt template to preview it."}</pre>
+      </details>
+    </>
+  );
+}
+
+function GuidedPromptInputEditor({
+  input,
+  onRemove,
+  onUpdate,
+}: {
+  input: GuidedRequiredInput;
+  onRemove: () => void;
+  onUpdate: (patch: Partial<GuidedRequiredInput>) => void;
+}) {
+  return (
+    <div className="guided-card nested-guided-card">
+      <div className="panel-heading">
+        <strong>{input.label || "Prompt input"}</strong>
+        <button className="secondary-button compact-button" onClick={onRemove} type="button">Remove</button>
+      </div>
+      <label>Input label</label>
+      <input onChange={(event) => onUpdate({ label: event.target.value })} value={input.label} />
+      <details className="advanced-details">
+        <summary>Advanced: Input ID</summary>
+        <input onChange={(event) => onUpdate({ id: slugify(event.target.value) })} value={input.id} />
+      </details>
+      <label>Description/help text</label>
+      <input onChange={(event) => onUpdate({ description: event.target.value })} value={input.description} />
+      <div className="settings-grid two-column">
+        <label className="checkbox-row">
+          <input checked={input.required} onChange={(event) => onUpdate({ required: event.target.checked })} type="checkbox" />
+          <span>Required</span>
+        </label>
+        <label className="checkbox-row">
+          <input checked={input.includeInPrompt} onChange={(event) => onUpdate({ includeInPrompt: event.target.checked })} type="checkbox" />
+          <span>Include in prompt</span>
+        </label>
+      </div>
+      <label>Type</label>
+      <select onChange={(event) => onUpdate({ inputType: event.target.value as PreparedPromptInputType })} value={input.inputType}>
+        <option value="short-text">short text</option>
+        <option value="long-text">long text</option>
+        <option value="choice">choice</option>
+        <option value="multi-choice">multi-choice</option>
+        <option value="date">date</option>
+        <option value="number">number</option>
+        <option value="boolean">boolean</option>
+      </select>
+      <label>Placeholder/example</label>
+      <input onChange={(event) => onUpdate({ placeholder: event.target.value })} value={input.placeholder} />
+      <label>Default value</label>
+      <input onChange={(event) => onUpdate({ defaultValue: event.target.value })} value={input.defaultValue} />
+      {(input.inputType === "choice" || input.inputType === "multi-choice") && (
+        <>
+          <label>Choices</label>
+          <textarea onChange={(event) => onUpdate({ choices: event.target.value })} placeholder="One option per line" rows={3} value={input.choices} />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -3438,7 +3978,26 @@ function UseScreen({
 
       <div className="build-layout">
         <div className="form-panel">
-          <h2>Prepare for ChatGPT or Claude</h2>
+          <h2>Prepare for Web Assistant</h2>
+          <p className="form-copy">
+            Creates a one-file Markdown version of your Agent Kit and a starter prompt for tools
+            like ChatGPT or Claude. This does not install anything; it prepares files you can upload
+            or paste.
+          </p>
+          <div className="artifact-explainer">
+            <article>
+              <strong>Use inside Forge</strong>
+              <p>AgentKitForge runs the kit with your selected AI provider.</p>
+            </article>
+            <article>
+              <strong>Prepare for Web Assistant</strong>
+              <p>Creates a file and prompt for manual upload or paste into web assistants.</p>
+            </article>
+            <article>
+              <strong>Install Targets</strong>
+              <p>Exports the kit into supported tools like Codex or Claude Code.</p>
+            </article>
+          </div>
 
           <label htmlFor="use-kit">Select kit folder</label>
           <div className="path-picker">
@@ -3535,7 +4094,8 @@ function PackageExportScreen({
   settings: PublicSettings;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
-  const [outputFolder, setOutputFolder] = useState(settings.defaultOutputFolder);
+  const [myKits, setMyKits] = useState<MyKitEntry[]>([]);
+  const [outputFolder, setOutputFolder] = useState(appExportsFolder(settings));
   const [validationProfile, setValidationProfile] = useState<ValidationProfile>(
     settings.preferredValidationProfile,
   );
@@ -3555,9 +4115,15 @@ function PackageExportScreen({
   }, [currentKitPath]);
 
   useEffect(() => {
-    setOutputFolder((current) => current || settings.defaultOutputFolder);
+    setOutputFolder((current) => current || appExportsFolder(settings));
     setValidationProfile(settings.preferredValidationProfile);
   }, [settings.defaultOutputFolder, settings.preferredValidationProfile]);
+
+  useEffect(() => {
+    invoke<MyKitEntry[]>("list_my_kits")
+      .then((kits) => setMyKits(kits.filter((kit) => kit.pathExists)))
+      .catch(() => setMyKits([]));
+  }, []);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
@@ -3697,9 +4263,11 @@ function PackageExportScreen({
       <div className="form-panel">
         <h2>Package / Export</h2>
 
-        <label htmlFor="package-kit-folder">Agent Kit folder</label>
+        <p className="form-copy">Create shareable artifacts from a kit in My Kits.</p>
+
+        <LabelWithHelp htmlFor="package-kit-folder" label="Agent Kit" help="Choose from My Kits first. Add an existing kit only if it is not in your library yet." />
         <div className="path-picker">
-          <input
+          <select
             id="package-kit-folder"
             onChange={(event) => {
               const nextPath = event.target.value;
@@ -3707,9 +4275,16 @@ function PackageExportScreen({
               onKitPathChange(nextPath);
               setValidationReport(null);
             }}
-            placeholder="Choose an Agent Kit"
             value={kitPath}
-          />
+          >
+            <option value="">Choose from My Kits</option>
+            {myKits.map((kit) => (
+              <option key={kit.path} value={kit.path}>{kit.name} ({kit.version})</option>
+            ))}
+            {kitPath && !myKits.some((kit) => pathsEqualLoose(kit.path, kitPath)) && (
+              <option value={kitPath}>{friendlyLocation(kitPath)}</option>
+            )}
+          </select>
           <button
             className="icon-button"
             disabled={isSelectingKit || isPackaging || isExportingOneFile}
@@ -3720,26 +4295,39 @@ function PackageExportScreen({
             <FolderOpen size={18} />
           </button>
         </div>
+        <button className="secondary-button compact-button" disabled={isSelectingKit || isPackaging || isExportingOneFile} onClick={selectKitFolder} type="button">
+          Add existing kit...
+        </button>
         <FieldError message={fieldErrors.kitPath} />
 
-        <label htmlFor="package-output-folder">Output folder</label>
-        <div className="path-picker">
+        <div className="artifact-explainer">
+          <article>
+            <strong>Full Agent Kit Package (.agentkit.zip)</strong>
+            <p>Best for importing into AgentKitForge, sharing, or publishing later. Includes structure, metadata, skills, policies, prompts, templates, examples, and other kit files.</p>
+          </article>
+          <article>
+            <strong>One-File Markdown (.onefile.md)</strong>
+            <p>Best for uploading or pasting into web assistants like ChatGPT or Claude. Easier to use manually, but not a full Agent Kit package.</p>
+          </article>
+        </div>
+
+        <LabelWithHelp htmlFor="package-output-folder" label="Output location" help="Exports save to AgentKitForge Exports by default." />
+        <div className="friendly-location-row">
+          <span>Save exports to: {isDefaultExportsFolder(outputFolder) ? "AgentKitForge Exports" : friendlyLocation(outputFolder)}</span>
+          <button className="secondary-button compact-button" disabled={isSelectingOutput || isPackaging || isExportingOneFile} onClick={selectOutputFolder} type="button">
+            <FolderOpen size={18} />
+            Change location
+          </button>
+        </div>
+        <details className="advanced-details">
+          <summary>Show full output path</summary>
           <input
             id="package-output-folder"
             onChange={(event) => setOutputFolder(event.target.value)}
-            placeholder="C:\\kits\\exports"
+            placeholder="Full output folder path"
             value={outputFolder}
           />
-          <button
-            className="icon-button"
-            disabled={isSelectingOutput || isPackaging || isExportingOneFile}
-            onClick={selectOutputFolder}
-            title="Select output folder"
-            type="button"
-          >
-            <FolderOpen size={18} />
-          </button>
-        </div>
+        </details>
         <FieldError message={fieldErrors.outputFolder} />
 
         <label className="checkbox-row" htmlFor="validate-before-package">
@@ -3812,10 +4400,18 @@ function InstallTargetsScreen({
   onKitPathChange: (path: string) => void;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
-  const [destinationSkillsDir, setDestinationSkillsDir] = useState("");
+  const [myKits, setMyKits] = useState<MyKitEntry[]>([]);
+  const [destinationSkillsDir, setDestinationSkillsDir] = useState(() =>
+    window.localStorage.getItem("agentkitforge.codexSkillsDestination") ?? "",
+  );
   const [force, setForce] = useState(false);
-  const [claudeDestinationDir, setClaudeDestinationDir] = useState("");
+  const [claudeDestinationDir, setClaudeDestinationDir] = useState(() =>
+    window.localStorage.getItem("agentkitforge.claudeCodeDestination") ?? "",
+  );
   const [claudeForce, setClaudeForce] = useState(false);
+  const [validateBeforeInstall, setValidateBeforeInstall] = useState(true);
+  const [validationProfile, setValidationProfile] = useState<ValidationProfile>("local-valid");
+  const [installValidationReport, setInstallValidationReport] = useState<ValidationReport | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; destinationSkillsDir?: string }>({});
   const [claudeFieldErrors, setClaudeFieldErrors] = useState<{ kitPath?: string; destinationDir?: string }>({});
   const [result, setResult] = useState<CodexExportResult | null>(null);
@@ -3833,6 +4429,12 @@ function InstallTargetsScreen({
   useEffect(() => {
     setKitPath(currentKitPath);
   }, [currentKitPath]);
+
+  useEffect(() => {
+    invoke<MyKitEntry[]>("list_my_kits")
+      .then((kits) => setMyKits(kits.filter((kit) => kit.pathExists)))
+      .catch(() => setMyKits([]));
+  }, []);
 
   async function selectKitFolder() {
     setIsSelectingKit(true);
@@ -3861,6 +4463,7 @@ function InstallTargetsScreen({
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setDestinationSkillsDir(selectedPath);
+        window.localStorage.setItem("agentkitforge.codexSkillsDestination", selectedPath);
         setResult(null);
       }
     } catch (caughtError) {
@@ -3878,6 +4481,7 @@ function InstallTargetsScreen({
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setClaudeDestinationDir(selectedPath);
+        window.localStorage.setItem("agentkitforge.claudeCodeDestination", selectedPath);
         setClaudeResult(null);
       }
     } catch (caughtError) {
@@ -3892,6 +4496,7 @@ function InstallTargetsScreen({
     setFieldErrors(validationErrors);
     setError(null);
     setResult(null);
+    setInstallValidationReport(null);
     setCopyState("idle");
 
     if (Object.keys(validationErrors).length > 0) {
@@ -3901,9 +4506,13 @@ function InstallTargetsScreen({
     setIsExporting(true);
 
     try {
+      if (validateBeforeInstall) {
+        await validateForInstall();
+      }
       const exportResult = await invoke<CodexExportResult>("export_agent_kit_to_codex", {
         input: { kitPath, destinationSkillsDir, force },
       });
+      window.localStorage.setItem("agentkitforge.codexSkillsDestination", destinationSkillsDir);
       setResult(exportResult);
     } catch (caughtError) {
       setError(errorToMessage(caughtError));
@@ -3917,6 +4526,7 @@ function InstallTargetsScreen({
     setClaudeFieldErrors(validationErrors);
     setClaudeError(null);
     setClaudeResult(null);
+    setInstallValidationReport(null);
     setClaudeCopyState("idle");
 
     if (Object.keys(validationErrors).length > 0) {
@@ -3926,14 +4536,29 @@ function InstallTargetsScreen({
     setIsExportingClaude(true);
 
     try {
+      if (validateBeforeInstall) {
+        await validateForInstall();
+      }
       const exportResult = await invoke<ClaudeCodeExportResult>("export_agent_kit_to_claude_code", {
         input: { kitPath, destinationDir: claudeDestinationDir, force: claudeForce },
       });
+      window.localStorage.setItem("agentkitforge.claudeCodeDestination", claudeDestinationDir);
       setClaudeResult(exportResult);
     } catch (caughtError) {
       setClaudeError(errorToMessage(caughtError));
     } finally {
       setIsExportingClaude(false);
+    }
+  }
+
+  async function validateForInstall() {
+    const report = await invoke<ValidationReport>("validate_agent_kit", {
+      rootPath: kitPath,
+      profile: validationProfile,
+    });
+    setInstallValidationReport(report);
+    if (!report.valid) {
+      throw new Error("Validation found issues. Fix them before installing, or turn off validation if you intentionally want to continue.");
     }
   }
 
@@ -3979,16 +4604,16 @@ function InstallTargetsScreen({
         <div className="form-panel">
           <h2>Export to Codex</h2>
           <p className="form-copy">
-            This exports the Agent Kit's skills into a Codex-compatible skills directory so Codex can
-            discover them in future sessions.
+            Codex needs skills in its own skills folder. AgentKitForge copies this kit's skills there
+            so Codex can discover them.
           </p>
           <p className="form-copy">
             AgentKitForge does not launch Codex or verify Codex loaded the skills.
           </p>
 
-          <label htmlFor="codex-kit-folder">Agent Kit folder</label>
+          <LabelWithHelp htmlFor="codex-kit-folder" label="Agent Kit" help="Choose from My Kits first. Add an existing kit only if it is not in your library yet." />
           <div className="path-picker">
-            <input
+            <select
               id="codex-kit-folder"
               onChange={(event) => {
                 const nextPath = event.target.value;
@@ -3997,30 +4622,44 @@ function InstallTargetsScreen({
                 setResult(null);
                 setClaudeResult(null);
               }}
-              placeholder="Choose an Agent Kit"
               value={kitPath}
-            />
+            >
+              <option value="">Choose from My Kits</option>
+              {myKits.map((kit) => (
+                <option key={kit.path} value={kit.path}>{kit.name} ({kit.version})</option>
+              ))}
+              {kitPath && !myKits.some((kit) => pathsEqualLoose(kit.path, kitPath)) && (
+                <option value={kitPath}>{friendlyLocation(kitPath)}</option>
+              )}
+            </select>
             <button className="icon-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} title="Select kit folder" type="button">
               <FolderOpen size={18} />
             </button>
           </div>
+          <button className="secondary-button compact-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} type="button">
+            Add existing kit...
+          </button>
           <FieldError message={fieldErrors.kitPath} />
 
-          <label htmlFor="codex-destination">Codex skills destination folder</label>
-          <div className="path-picker">
+          <LabelWithHelp htmlFor="codex-destination" label="Codex destination" help="Choose the skills folder Codex reads from. AgentKitForge remembers this destination." />
+          <div className="friendly-location-row">
+            <span>Destination: {destinationSkillsDir ? "Codex skills folder" : "Choose Codex skills folder"}</span>
+            <button className="secondary-button compact-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} type="button">
+              Choose custom location
+            </button>
+          </div>
+          <details className="advanced-details">
+            <summary>Show full destination path</summary>
             <input
               id="codex-destination"
               onChange={(event) => {
                 setDestinationSkillsDir(event.target.value);
                 setResult(null);
               }}
-              placeholder="C:\\Users\\you\\.codex\\skills"
+              placeholder="Full Codex skills folder path"
               value={destinationSkillsDir}
             />
-            <button className="icon-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} title="Select Codex skills folder" type="button">
-              <FolderOpen size={18} />
-            </button>
-          </div>
+          </details>
           <FieldError message={fieldErrors.destinationSkillsDir} />
 
           <label className="checkbox-row" htmlFor="codex-force">
@@ -4032,6 +4671,13 @@ function InstallTargetsScreen({
             />
             <span>Force overwrite AgentKitForge-generated folders</span>
           </label>
+
+          <InstallValidationControls
+            profile={validationProfile}
+            validateBeforeInstall={validateBeforeInstall}
+            onProfileChange={setValidationProfile}
+            onValidateBeforeInstallChange={setValidateBeforeInstall}
+          />
 
           <button className="primary-button" disabled={isExporting} onClick={exportToCodex} type="button">
             <Plug size={18} />
@@ -4048,6 +4694,7 @@ function InstallTargetsScreen({
             onCopyDestinationPath={copyDestinationPath}
             onOpenDestinationFolder={openDestinationFolder}
             result={result}
+            validationReport={installValidationReport}
           />
         </div>
       </div>
@@ -4056,16 +4703,17 @@ function InstallTargetsScreen({
         <div className="form-panel">
           <h2>Export to Claude Code</h2>
           <p className="form-copy">
-            This exports the Agent Kit into a Claude Code plugin-style folder.
+            Claude Code uses plugin-style folders. AgentKitForge exports this kit as a Claude Code
+            plugin-style package.
           </p>
           <p className="form-copy">
             AgentKitForge does not launch Claude Code or verify Claude Code loaded the plugin.
             This is an initial adapter; verify plugin loading behavior in Claude Code.
           </p>
 
-          <label htmlFor="claude-kit-folder">Agent Kit folder</label>
+          <LabelWithHelp htmlFor="claude-kit-folder" label="Agent Kit" help="Choose from My Kits first. Add an existing kit only if it is not in your library yet." />
           <div className="path-picker">
-            <input
+            <select
               id="claude-kit-folder"
               onChange={(event) => {
                 const nextPath = event.target.value;
@@ -4074,30 +4722,44 @@ function InstallTargetsScreen({
                 setResult(null);
                 setClaudeResult(null);
               }}
-              placeholder="Choose an Agent Kit"
               value={kitPath}
-            />
+            >
+              <option value="">Choose from My Kits</option>
+              {myKits.map((kit) => (
+                <option key={kit.path} value={kit.path}>{kit.name} ({kit.version})</option>
+              ))}
+              {kitPath && !myKits.some((kit) => pathsEqualLoose(kit.path, kitPath)) && (
+                <option value={kitPath}>{friendlyLocation(kitPath)}</option>
+              )}
+            </select>
             <button className="icon-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} title="Select kit folder" type="button">
               <FolderOpen size={18} />
             </button>
           </div>
+          <button className="secondary-button compact-button" disabled={isSelectingKit || isExporting || isExportingClaude} onClick={selectKitFolder} type="button">
+            Add existing kit...
+          </button>
           <FieldError message={claudeFieldErrors.kitPath} />
 
-          <label htmlFor="claude-destination">Claude Code plugins destination folder</label>
-          <div className="path-picker">
+          <LabelWithHelp htmlFor="claude-destination" label="Claude Code destination" help="Choose the plugins folder Claude Code reads from. AgentKitForge remembers this destination." />
+          <div className="friendly-location-row">
+            <span>Destination: {claudeDestinationDir ? "Claude Code plugins folder" : "Choose Claude Code plugins folder"}</span>
+            <button className="secondary-button compact-button" disabled={isSelectingClaudeDestination || isExportingClaude} onClick={selectClaudeDestinationFolder} type="button">
+              Choose custom location
+            </button>
+          </div>
+          <details className="advanced-details">
+            <summary>Show full destination path</summary>
             <input
               id="claude-destination"
               onChange={(event) => {
                 setClaudeDestinationDir(event.target.value);
                 setClaudeResult(null);
               }}
-              placeholder="C:\\Users\\you\\.claude\\plugins"
+              placeholder="Full Claude Code plugins folder path"
               value={claudeDestinationDir}
             />
-            <button className="icon-button" disabled={isSelectingClaudeDestination || isExportingClaude} onClick={selectClaudeDestinationFolder} title="Select Claude Code plugins folder" type="button">
-              <FolderOpen size={18} />
-            </button>
-          </div>
+          </details>
           <FieldError message={claudeFieldErrors.destinationDir} />
 
           <label className="checkbox-row" htmlFor="claude-force">
@@ -4109,6 +4771,13 @@ function InstallTargetsScreen({
             />
             <span>Force overwrite AgentKitForge-generated plugin folder</span>
           </label>
+
+          <InstallValidationControls
+            profile={validationProfile}
+            validateBeforeInstall={validateBeforeInstall}
+            onProfileChange={setValidationProfile}
+            onValidateBeforeInstallChange={setValidateBeforeInstall}
+          />
 
           <button className="primary-button" disabled={isExportingClaude} onClick={exportToClaudeCode} type="button">
             <Plug size={18} />
@@ -4125,6 +4794,7 @@ function InstallTargetsScreen({
             onCopyDestinationPath={copyClaudeDestinationPath}
             onOpenDestinationFolder={openClaudeDestinationFolder}
             result={claudeResult}
+            validationReport={installValidationReport}
           />
         </div>
       </div>
@@ -4139,6 +4809,7 @@ function CodexExportResults({
   onCopyDestinationPath,
   onOpenDestinationFolder,
   result,
+  validationReport,
 }: {
   copyState: "idle" | "copied" | "failed";
   error: string | null;
@@ -4146,12 +4817,13 @@ function CodexExportResults({
   onCopyDestinationPath: () => void;
   onOpenDestinationFolder: () => void;
   result: CodexExportResult | null;
+  validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
     return <p className="state-copy">Exporting Codex skills...</p>;
   }
 
-  if (error) {
+  if (error && !result) {
     return (
       <div className="error-state" role="alert">
         {error}
@@ -4160,7 +4832,12 @@ function CodexExportResults({
   }
 
   if (!result) {
-    return <p className="state-copy">Export a kit to see Codex skill folders here.</p>;
+    return (
+      <>
+        {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
+        <p className="state-copy">Export a kit to see Codex skill folders here.</p>
+      </>
+    );
   }
 
   return (
@@ -4169,17 +4846,31 @@ function CodexExportResults({
         <strong>Exported</strong>
         <span>{result.exportedSkillFolders.length} skill folder{result.exportedSkillFolders.length === 1 ? "" : "s"}</span>
       </div>
+      {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
 
       <dl className="report-meta">
         <div>
-          <dt>Destination skills directory</dt>
-          <dd>{result.destinationSkillsDir}</dd>
+          <dt>Destination</dt>
+          <dd>Codex skills folder</dd>
         </div>
         <div>
           <dt>Generated index folder</dt>
-          <dd>{result.generatedIndexFolder || "None"}</dd>
+          <dd>{result.generatedIndexFolder ? friendlyLocation(result.generatedIndexFolder) : "None"}</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Show full paths</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Destination skills directory</dt>
+            <dd>{result.destinationSkillsDir}</dd>
+          </div>
+          <div>
+            <dt>Generated index folder</dt>
+            <dd>{result.generatedIndexFolder || "None"}</dd>
+          </div>
+        </dl>
+      </details>
 
       {result.warnings.length > 0 && (
         <div className="inline-warning">
@@ -4212,6 +4903,46 @@ function CodexExportResults({
   );
 }
 
+function InstallValidationControls({
+  onProfileChange,
+  onValidateBeforeInstallChange,
+  profile,
+  validateBeforeInstall,
+}: {
+  onProfileChange: (profile: ValidationProfile) => void;
+  onValidateBeforeInstallChange: (value: boolean) => void;
+  profile: ValidationProfile;
+  validateBeforeInstall: boolean;
+}) {
+  return (
+    <div className="advanced-details">
+      <label className="checkbox-row" htmlFor="install-validate-before-export">
+        <input
+          checked={validateBeforeInstall}
+          id="install-validate-before-export"
+          onChange={(event) => onValidateBeforeInstallChange(event.target.checked)}
+          type="checkbox"
+        />
+        <span>Validate before installing</span>
+        <HelpTip text="Checks the kit before copying it into an external tool folder." />
+      </label>
+      <LabelWithHelp htmlFor="install-validation-profile" label="Validation level" help="Choose how strict the pre-install check should be." />
+      <select
+        disabled={!validateBeforeInstall}
+        id="install-validation-profile"
+        onChange={(event) => onProfileChange(event.target.value as ValidationProfile)}
+        value={profile}
+      >
+        {validationProfiles.map((validationProfile) => (
+          <option key={validationProfile} value={validationProfile}>
+            {validationProfile}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 function ClaudeCodeExportResults({
   copyState,
   error,
@@ -4219,6 +4950,7 @@ function ClaudeCodeExportResults({
   onCopyDestinationPath,
   onOpenDestinationFolder,
   result,
+  validationReport,
 }: {
   copyState: "idle" | "copied" | "failed";
   error: string | null;
@@ -4226,12 +4958,13 @@ function ClaudeCodeExportResults({
   onCopyDestinationPath: () => void;
   onOpenDestinationFolder: () => void;
   result: ClaudeCodeExportResult | null;
+  validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
     return <p className="state-copy">Exporting Claude Code plugin...</p>;
   }
 
-  if (error) {
+  if (error && !result) {
     return (
       <div className="error-state" role="alert">
         {error}
@@ -4240,7 +4973,12 @@ function ClaudeCodeExportResults({
   }
 
   if (!result) {
-    return <p className="state-copy">Export a kit to see Claude Code plugin files here.</p>;
+    return (
+      <>
+        {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
+        <p className="state-copy">Export a kit to see Claude Code plugin files here.</p>
+      </>
+    );
   }
 
   return (
@@ -4249,21 +4987,31 @@ function ClaudeCodeExportResults({
         <strong>Exported</strong>
         <span>{result.exportedSkillFolders.length} skill folder{result.exportedSkillFolders.length === 1 ? "" : "s"}</span>
       </div>
+      {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
 
       <dl className="report-meta">
         <div>
-          <dt>Destination directory</dt>
-          <dd>{result.destinationDir}</dd>
+          <dt>Destination</dt>
+          <dd>Claude Code plugins folder</dd>
         </div>
         <div>
           <dt>Generated plugin folder</dt>
-          <dd>{result.pluginFolder}</dd>
-        </div>
-        <div>
-          <dt>Plugin manifest path</dt>
-          <dd>{result.pluginManifestPath}</dd>
+          <dd>{friendlyLocation(result.pluginFolder)}</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Show full paths</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Destination directory</dt>
+            <dd>{result.destinationDir}</dd>
+          </div>
+          <div>
+            <dt>Plugin manifest path</dt>
+            <dd>{result.pluginManifestPath}</dd>
+          </div>
+        </dl>
+      </details>
 
       {result.warnings.length > 0 && (
         <div className="inline-warning">
@@ -4346,10 +5094,14 @@ function PackageExportResults({
               <article className="artifact-item" key={`${artifact.artifactType}-${artifact.artifactPath}`}>
                 <div>
                   <div className="issue-code">{artifact.artifactType}</div>
-                  <p>{artifact.artifactPath}</p>
+                  <p>{friendlyFileName(artifact.artifactPath)}</p>
                   {copyState === artifact.artifactPath && (
                     <div className="copy-state">Artifact path copied.</div>
                   )}
+                  <details className="advanced-details">
+                    <summary>Show full path</summary>
+                    <p className="inline-code">{artifact.artifactPath}</p>
+                  </details>
                 </div>
                 <button
                   className="secondary-button compact-button"
@@ -4922,6 +5674,40 @@ function friendlyLocation(path: string) {
   return `${parts[parts.length - 2]} / ${parts[parts.length - 1]}`;
 }
 
+function appKitsFolder(settings: PublicSettings) {
+  return settings.defaultOutputFolder || "";
+}
+
+function appExportsFolder(settings: PublicSettings) {
+  return siblingAppFolder(settings.defaultOutputFolder, "Exports");
+}
+
+function siblingAppFolder(basePath: string, folderName: string) {
+  if (!basePath.trim()) {
+    return "";
+  }
+  const separator = basePath.includes("\\") ? "\\" : "/";
+  const parts = basePath.split(/[\\/]/).filter(Boolean);
+  if (parts[parts.length - 1]?.toLowerCase() === "kits") {
+    return `${basePath.slice(0, basePath.lastIndexOf(parts[parts.length - 1]))}${folderName}`;
+  }
+  return `${basePath}${basePath.endsWith("\\") || basePath.endsWith("/") ? "" : separator}${folderName}`;
+}
+
+function isDefaultKitsFolder(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() === "kits";
+}
+
+function isDefaultExportsFolder(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() === "exports";
+}
+
+function openDocsLink(url: string) {
+  invoke("open_external_url", { url }).catch(() => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  });
+}
+
 function OneFileExportResults({
   copyState,
   error,
@@ -4939,7 +5725,7 @@ function OneFileExportResults({
     return <p className="state-copy">Exporting Agent Kit instructions...</p>;
   }
 
-  if (error) {
+  if (error && !result) {
     return (
       <div className="error-state" role="alert">
         {error}
@@ -5123,7 +5909,7 @@ function createDefaultGuidedBuilderState(outputFolder: string): GuidedBuilderSta
     documentLike: true,
     downloadFileName: "agent-kit-output",
     summaryStyle: "Clear, practical, and user-facing",
-    requiredInputs: [createDefaultRequiredInput(1)],
+    preparedPrompts: [createDefaultGuidedPrompt(1)],
     examples: [createDefaultExample(1)],
     force: false,
   };
@@ -5152,16 +5938,48 @@ function createDefaultRequiredInput(index: number): GuidedRequiredInput {
     required: true,
     inputType: "short-text",
     placeholder: "",
+    defaultValue: "",
     includeInPrompt: true,
     choices: "",
+  };
+}
+
+function createDefaultGuidedPrompt(index: number): GuidedPreparedPrompt {
+  return {
+    id: `prompt-${index}`,
+    name: "",
+    description: "",
+    template: "Help with {{task}} for {{audience}}.",
+    inputs: [
+      {
+        ...createDefaultRequiredInput(1),
+        id: "task",
+        label: "Task",
+        description: "What should the kit help with?",
+        placeholder: "Review this workbook and summarize risks.",
+      },
+      {
+        ...createDefaultRequiredInput(2),
+        id: "audience",
+        label: "Audience",
+        description: "Who will read the output?",
+        required: false,
+        placeholder: "Client team, manager, analyst...",
+      },
+    ],
+    outputMode: "markdown",
+    documentLikeOutput: true,
+    suggestedFileName: "agent-kit-output.md",
+    tags: "",
   };
 }
 
 function createDefaultExample(index: number): GuidedExample {
   return {
     id: `example-${index}`,
+    promptId: "",
     prompt: "",
-    requiredInputExamples: "",
+    inputExamples: "",
     output: "",
   };
 }
@@ -5191,22 +6009,22 @@ function validateGuidedBuilder(form: GuidedBuilderState) {
       return `Complete triggers, use when, procedure, and output expectations for ${skill.name}.`;
     }
   }
+  const validPrompts = form.preparedPrompts.filter((prompt) => prompt.name.trim() && prompt.template.trim());
+  if (validPrompts.length === 0) {
+    return "Add at least one Prepared Prompt with a name and prompt template.";
+  }
+  for (const prompt of validPrompts) {
+    const missingInputs = extractPromptVariables(prompt.template).filter((variable) =>
+      !prompt.inputs.some((input) => input.id === variable && input.label.trim()),
+    );
+    if (missingInputs.length > 0) {
+      return `Add inputs for ${prompt.name}: ${missingInputs.join(", ")}.`;
+    }
+  }
   return null;
 }
 
 function buildGuidedAgentKitDraft(form: GuidedBuilderState) {
-  const requiredInputs = form.requiredInputs
-    .filter((input) => input.label.trim())
-    .map((input) => ({
-      id: input.id || slugify(input.label),
-      label: input.label,
-      description: input.description,
-      required: input.required,
-      inputType: input.inputType,
-      placeholder: input.placeholder,
-      includeInPrompt: input.includeInPrompt,
-      choices: splitLines(input.choices),
-    }));
   const outputConfig = {
     documentLike: form.documentLike,
     suggestedDownloadName: form.downloadFileName,
@@ -5236,15 +6054,18 @@ function buildGuidedAgentKitDraft(form: GuidedBuilderState) {
     .filter((example) => example.prompt.trim())
     .map((example, index) => ({
       id: example.id || `example-${index + 1}`,
-      prompt: withOptionalSections(example.prompt, [["Required input examples", example.requiredInputExamples]]),
+      prompt: withOptionalSections(example.prompt, [
+        ["Prepared prompt", example.promptId],
+        ["Example input values", example.inputExamples],
+      ]),
       output: example.output.trim() || undefined,
     }));
   const policies = guardrails.length > 0 ? [{ id: "guardrails", description: "Guided Builder guardrails", rules: guardrails }] : [];
   const templates = [
     {
-      id: "agentkitforge-required-inputs",
-      path: "agentkitforge/required-inputs.json",
-      content: JSON.stringify({ requiredInputs, outputConfig }, null, 2),
+      id: "agentkitforge-output-settings",
+      path: "agentkitforge/output-settings.json",
+      content: JSON.stringify({ outputConfig }, null, 2),
     },
   ];
 
@@ -5267,22 +6088,51 @@ function buildGuidedAgentKitDraft(form: GuidedBuilderState) {
     setupLevel: "low",
     compatibilityTargets: ["codex", "chatgpt", "claude"],
     riskLevel: highestRiskLevel(skills.map((skill) => skill.riskLevel)),
-    agentInstructions: renderGuidedAgentInstructions(form, guardrails, requiredInputs),
-    startHere: renderGuidedStartHere(form, requiredInputs),
-    readme: renderGuidedReadme(form, requiredInputs),
+    agentInstructions: renderGuidedAgentInstructions(form, guardrails),
+    startHere: renderGuidedStartHere(form),
+    readme: renderGuidedReadme(form),
     changelog: "# Changelog\n\n## 0.1.0\n\nInitial Guided Builder kit.\n",
     skills,
     policies,
     examples,
     templates,
+    preparedPrompts: buildGuidedPreparedPrompts(form),
   };
 }
 
-function renderGuidedAgentInstructions(
-  form: GuidedBuilderState,
-  guardrails: string[],
-  requiredInputs: Array<{ label: string; description: string; required: boolean; includeInPrompt: boolean }>,
-) {
+function buildGuidedPreparedPrompts(form: GuidedBuilderState) {
+  return form.preparedPrompts
+    .filter((prompt) => prompt.name.trim() && prompt.template.trim())
+    .map((prompt, index) => ({
+      id: prompt.id || slugify(prompt.name) || `prompt-${index + 1}`,
+      name: prompt.name.trim(),
+      description: prompt.description.trim() || prompt.name.trim(),
+      template: prompt.template.trim(),
+      inputs: prompt.inputs
+        .filter((input) => input.label.trim())
+        .map((input) => ({
+          id: input.id || slugify(input.label),
+          label: input.label.trim(),
+          description: input.description.trim() || undefined,
+          type: input.inputType,
+          required: input.required,
+          placeholder: input.placeholder.trim() || undefined,
+          defaultValue: input.defaultValue.trim() || undefined,
+          choices: splitLines(input.choices),
+          includeInPrompt: input.includeInPrompt,
+        })),
+      outputMode: prompt.outputMode,
+      documentLikeOutput: prompt.documentLikeOutput,
+      suggestedFileName: prompt.suggestedFileName.trim() || undefined,
+      tags: splitLines(prompt.tags),
+    }));
+}
+
+function renderGuidedAgentInstructions(form: GuidedBuilderState, guardrails: string[]) {
+  const promptList = form.preparedPrompts
+    .filter((prompt) => prompt.name.trim())
+    .map((prompt) => `- ${prompt.name}: ${prompt.description || "Reusable prepared prompt."}`)
+    .join("\n");
   return `# ${form.name}
 
 ${form.description}
@@ -5295,9 +6145,9 @@ ${form.domain || "General"}
 
 ${form.targetUsers || "General users"}
 
-## Required inputs
+## Prepared prompts
 
-${requiredInputs.length > 0 ? requiredInputs.map((input) => `- ${input.label}${input.required ? " (required)" : " (optional)"}: ${input.description || "User-provided context."}`).join("\n") : "- Ask clarifying questions if important details are missing."}
+${promptList || "- Ask clarifying questions if important details are missing."}
 
 ## Guardrails
 
@@ -5311,20 +6161,28 @@ ${guardrails.length > 0 ? guardrails.map((guardrail) => `- ${guardrail}`).join("
 `;
 }
 
-function renderGuidedStartHere(form: GuidedBuilderState, requiredInputs: Array<{ label: string; required: boolean }>) {
+function renderGuidedStartHere(form: GuidedBuilderState) {
+  const promptList = form.preparedPrompts
+    .filter((prompt) => prompt.name.trim())
+    .map((prompt) => `- ${prompt.name}`)
+    .join("\n");
   return `# ${form.name}
 
 ${form.description}
 
 Use this kit for ${form.domain || "general business"} work with ${form.targetUsers || "the intended users"}.
 
-Before running, collect:
+Start by choosing a prepared prompt:
 
-${requiredInputs.length > 0 ? requiredInputs.map((input) => `- ${input.label}${input.required ? " (required)" : " (optional)"}`).join("\n") : "- The user's task and any relevant context."}
+${promptList || "- The user's task and any relevant context."}
 `;
 }
 
-function renderGuidedReadme(form: GuidedBuilderState, requiredInputs: Array<{ label: string; description: string; required: boolean }>) {
+function renderGuidedReadme(form: GuidedBuilderState) {
+  const promptList = form.preparedPrompts
+    .filter((prompt) => prompt.name.trim())
+    .map((prompt) => `- **${prompt.name}**: ${prompt.description || "Reusable prepared prompt."}`)
+    .join("\n");
   return `# ${form.name}
 
 ${form.description}
@@ -5337,9 +6195,9 @@ ${form.domain || "General"}
 
 ${form.targetUsers || "General users"}
 
-## Required inputs
+## Prepared prompts
 
-${requiredInputs.length > 0 ? requiredInputs.map((input) => `- **${input.label}**${input.required ? " (required)" : " (optional)"}: ${input.description || "User-provided context."}`).join("\n") : "No additional required inputs were defined."}
+${promptList || "No prepared prompts were defined."}
 
 ## Output style
 
@@ -5366,30 +6224,71 @@ function guidedTargetOutputFolder(form: GuidedBuilderState) {
   return `${root}${root.includes("\\") ? "\\" : "/"}${folderName}`;
 }
 
-function guardrailPresetForDomain(domain: string) {
+function policyPresetsForDomain(domain: string) {
   const normalized = domain.toLowerCase();
   if (normalized.includes("finance") || normalized.includes("accounting")) {
-    return "Do not provide tax, legal, audit, or assurance guarantees. Require qualified human review before decisions are made.";
+    return [
+      "Do not provide tax filing advice.",
+      "Do not claim audit or GAAP compliance.",
+      "Require human review before client-facing use.",
+    ];
   }
   if (normalized.includes("legal")) {
-    return "Do not provide legal advice. Require attorney review before relying on legal conclusions.";
+    return ["Do not provide legal advice.", "Recommend attorney review."];
   }
   if (normalized.includes("health") || normalized.includes("medical")) {
-    return "Do not provide medical advice. Require clinician review before relying on medical or patient-facing conclusions.";
+    return ["Do not provide medical advice.", "Recommend clinician review."];
   }
   if (normalized.includes("devops") || normalized.includes("sre")) {
-    return "Operate read-only by default. Require explicit approval before destructive, production, or irreversible actions.";
+    return [
+      "Use read-only diagnostics by default.",
+      "Require approval for destructive or mutating actions.",
+    ];
+  }
+  if (normalized.includes("cloud") || normalized.includes("infrastructure")) {
+    return [
+      "Require approval before making infrastructure changes.",
+      "Do not expose secrets.",
+    ];
   }
   if (normalized.includes("security")) {
-    return "Only assist authorized work. Do not execute or facilitate exploit activity without clear permission and scope.";
+    return [
+      "Require authorization.",
+      "Do not execute exploits or destructive tests without explicit permission.",
+    ];
   }
   if (normalized.includes("compliance")) {
-    return "Require human review and do not claim certification, compliance status, or audit readiness without evidence.";
+    return [
+      "Do not claim certification/compliance status without evidence.",
+      "Require human review.",
+    ];
   }
   if (normalized.includes("hr") || normalized.includes("recruiting")) {
-    return "Avoid discriminatory screening or protected-class inferences. Require human review for employment decisions.";
+    return [
+      "Avoid discriminatory screening or protected-class inferences.",
+      "Require human review.",
+    ];
   }
-  return "Flag uncertainty, cite assumptions, and avoid unsupported claims.";
+  return ["Flag uncertainty.", "Avoid unsupported claims."];
+}
+
+function isRiskyGuidedDomain(domain: string) {
+  const normalized = domain.toLowerCase();
+  return [
+    "finance",
+    "accounting",
+    "legal",
+    "health",
+    "medical",
+    "devops",
+    "sre",
+    "cloud",
+    "infrastructure",
+    "security",
+    "compliance",
+    "hr",
+    "recruiting",
+  ].some((keyword) => normalized.includes(keyword));
 }
 
 function slugify(value: string) {
@@ -5406,6 +6305,30 @@ function splitLines(value: string) {
     .split(/\r?\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function extractPromptVariables(template: string) {
+  return Array.from(template.matchAll(/\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g))
+    .map((match) => slugify(match[1]).replace(/-/g, "_"))
+    .filter((value, index, values) => value && values.indexOf(value) === index);
+}
+
+function renderGuidedPromptPreview(prompt: GuidedPreparedPrompt) {
+  return prompt.template.replace(/\{\{\s*([a-zA-Z0-9_-]+)\s*\}\}/g, (_match, variable: string) => {
+    const normalized = slugify(variable).replace(/-/g, "_");
+    const input = prompt.inputs.find((entry) => entry.id === normalized);
+    return input?.defaultValue || input?.placeholder || `[${input?.label || normalized}]`;
+  });
+}
+
+function titleCaseFromId(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function promptInputId(value: string) {
+  return slugify(value).replace(/-/g, "_");
 }
 
 function withOptionalSections(base: string, sections: Array<[string, string]>) {
@@ -6134,15 +7057,15 @@ function AboutScreen({ settings }: { settings: PublicSettings }) {
         </dl>
 
         <div className="about-links">
-          <a href="https://AgentKitForge.com" target="_blank" rel="noreferrer">
+          <button onClick={() => openDocsLink("https://agentkitforge.com/")} type="button">
             AgentKitForge.com
-          </a>
-          <a href="https://AgentKitMarket.com" target="_blank" rel="noreferrer">
-            AgentKitMarket.com
-          </a>
-          <a href="https://github.com/agentkitforge/agentkitforge-app" target="_blank" rel="noreferrer">
-            GitHub repo placeholder
-          </a>
+          </button>
+          <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">
+            Docs
+          </button>
+          <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">
+            Agent Kit Spec
+          </button>
         </div>
       </section>
 
@@ -6310,15 +7233,21 @@ function RenderAgentKitDraftResults({
 }
 
 function GeneratedDraftResults({
+  changeRequest,
   copyState,
   error,
   isLoading,
+  isRevising,
   isRenderingDraft,
   isSelectingRenderOutput,
+  onChangeRequestChange,
+  onClearSession,
   onCopyJson,
   onRenderDraft,
   onRenderForceChange,
   onRenderOutputFolderChange,
+  onRequestChanges,
+  onRestoreRevision,
   onSaveJson,
   onSelectRenderOutputFolder,
   onValidateRenderedKit,
@@ -6329,15 +7258,21 @@ function GeneratedDraftResults({
   result,
   savePath,
 }: {
+  changeRequest: string;
   copyState: "idle" | "copied" | "failed";
   error: string | null;
   isLoading: boolean;
+  isRevising: boolean;
   isRenderingDraft: boolean;
   isSelectingRenderOutput: boolean;
+  onChangeRequestChange: (value: string) => void;
+  onClearSession: () => void;
   onCopyJson: () => void;
   onRenderDraft: () => void;
   onRenderForceChange: (value: boolean) => void;
   onRenderOutputFolderChange: (value: string) => void;
+  onRequestChanges: () => void;
+  onRestoreRevision: (revisionId: string) => void;
   onSaveJson: () => void;
   onSelectRenderOutputFolder: () => void;
   onValidateRenderedKit: (rootPath: string) => void;
@@ -6368,10 +7303,14 @@ function GeneratedDraftResults({
     );
   }
 
+  const currentRevision = result.currentRevision ?? currentDraftRevision(result.session);
+  const currentDraft = currentRevision?.draft ?? result.draftJson;
+  const draftSummary = summarizeAgentKitDraft(currentDraft);
+
   return (
     <div className="generated-draft-result">
       <div className="status-banner valid">
-        <strong>Draft generated</strong>
+        <strong>Draft session active</strong>
         <span>{result.providerName} · {result.model}</span>
       </div>
 
@@ -6383,12 +7322,85 @@ function GeneratedDraftResults({
         </div>
       )}
 
+      {error && (
+        <div className="error-state" role="alert">
+          {error}
+        </div>
+      )}
+
+      <AIDraftSummary
+        summary={draftSummary}
+        validationTarget={String(result.session?.metadata?.desiredValidationLevel ?? "local-valid")}
+      />
+
+      <div className="draft-section-grid">
+        <DraftSectionCard title="Basics" items={draftSummary.basics} />
+        <DraftSectionCard title="Skills" items={draftSummary.skills} />
+        <DraftSectionCard title="Policies" items={draftSummary.policies} />
+        <DraftSectionCard title="Prepared Prompts" items={draftSummary.preparedPrompts} />
+        <DraftSectionCard title="Templates / Outputs" items={draftSummary.templates} />
+        <DraftSectionCard title="Examples" items={draftSummary.examples} />
+      </div>
+
+      <div className="render-generated-panel">
+        <h3>Request changes</h3>
+        <LabelWithHelp
+          htmlFor="ai-draft-change-request"
+          label="Change request"
+          help="Describe changes in plain language. AgentKitForge asks the provider for a full updated draft, then validates it."
+        />
+        <textarea
+          id="ai-draft-change-request"
+          onChange={(event) => onChangeRequestChange(event.target.value)}
+          placeholder="Add a prepared prompt for client memos. Ask for company name and reporting period before running."
+          rows={4}
+          value={changeRequest}
+        />
+        <button
+          className="primary-button"
+          disabled={isRevising}
+          onClick={onRequestChanges}
+          type="button"
+        >
+          <Sparkles size={18} />
+          {isRevising ? "Requesting changes" : "Request Changes"}
+        </button>
+      </div>
+
+      {result.session && (
+        <div className="render-generated-panel">
+          <h3>Revision history</h3>
+          <div className="artifact-list">
+            {result.session.revisions.map((revision) => (
+              <article className="artifact-item" key={revision.id}>
+                <div>
+                  <div className="issue-code">
+                    v{revision.version} {revision.version === 1 ? "Initial draft" : summarizeChangeRequest(revision.changeRequest)}
+                  </div>
+                  <p>{revision.createdAt ? new Date(revision.createdAt).toLocaleString() : "Saved revision"}</p>
+                </div>
+                <button
+                  className={revision.id === result.session?.currentRevisionId ? "primary-button compact-button" : "secondary-button compact-button"}
+                  onClick={() => onRestoreRevision(revision.id)}
+                  type="button"
+                >
+                  {revision.id === result.session?.currentRevisionId ? "Current" : "Restore"}
+                </button>
+              </article>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="button-row">
         <button className="secondary-button" onClick={onCopyJson} type="button">
           Copy JSON
         </button>
         <button className="secondary-button" onClick={onSaveJson} type="button">
           Save draft JSON
+        </button>
+        <button className="secondary-button" onClick={onClearSession} type="button">
+          Clear Session
         </button>
       </div>
 
@@ -6485,6 +7497,165 @@ function GeneratedDraftResults({
   );
 }
 
+type DraftSummary = {
+  name: string;
+  description: string;
+  domain: string;
+  targetUsers: string;
+  skillsCount: number;
+  policiesCount: number;
+  preparedPromptsCount: number;
+  templatesCount: number;
+  examplesCount: number;
+  basics: string[];
+  skills: string[];
+  policies: string[];
+  preparedPrompts: string[];
+  templates: string[];
+  examples: string[];
+};
+
+function AIDraftSummary({
+  summary,
+  validationTarget,
+}: {
+  summary: DraftSummary;
+  validationTarget: string;
+}) {
+  return (
+    <dl className="report-meta">
+      <div>
+        <dt>Kit name</dt>
+        <dd>{summary.name}</dd>
+      </div>
+      <div>
+        <dt>Description</dt>
+        <dd>{summary.description}</dd>
+      </div>
+      <div>
+        <dt>Domain</dt>
+        <dd>{summary.domain}</dd>
+      </div>
+      <div>
+        <dt>Target users</dt>
+        <dd>{summary.targetUsers}</dd>
+      </div>
+      <div>
+        <dt>Skills</dt>
+        <dd>{summary.skillsCount}</dd>
+      </div>
+      <div>
+        <dt>Policies</dt>
+        <dd>{summary.policiesCount}</dd>
+      </div>
+      <div>
+        <dt>Prepared prompts</dt>
+        <dd>{summary.preparedPromptsCount}</dd>
+      </div>
+      <div>
+        <dt>Templates</dt>
+        <dd>{summary.templatesCount}</dd>
+      </div>
+      <div>
+        <dt>Examples</dt>
+        <dd>{summary.examplesCount}</dd>
+      </div>
+      <div>
+        <dt>Validation target</dt>
+        <dd>{validationTarget}</dd>
+      </div>
+    </dl>
+  );
+}
+
+function DraftSectionCard({ title, items }: { title: string; items: string[] }) {
+  return (
+    <article className="render-generated-panel">
+      <h3>{title}</h3>
+      {items.length > 0 ? (
+        <ul>
+          {items.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="state-copy compact-state">Nothing defined yet.</p>
+      )}
+    </article>
+  );
+}
+
+function currentDraftRevision(session?: AgentKitDraftSession) {
+  if (!session) {
+    return undefined;
+  }
+  return session.revisions.find((revision) => revision.id === session.currentRevisionId);
+}
+
+function summarizeAgentKitDraft(draftInput: unknown): DraftSummary {
+  const draft = isRecord(draftInput) ? draftInput : {};
+  const skills = arrayOfRecords(draft.skills);
+  const policies = arrayOfRecords(draft.policies);
+  const preparedPrompts = arrayOfRecords(draft.preparedPrompts);
+  const templates = arrayOfRecords(draft.templates);
+  const examples = arrayOfRecords(draft.examples);
+  const name = stringValue(draft.name, "Untitled Agent Kit");
+  const description = stringValue(draft.description, "No description yet.");
+  const metadata = isRecord(draft.metadata) ? draft.metadata : {};
+  const domain = stringValue(draft.domain, stringValue(metadata.domain, "Not specified"));
+  const targetUsers = formatUnknownList(draft.targetUsers) || formatUnknownList(metadata.targetUsers) || "Not specified";
+
+  return {
+    name,
+    description,
+    domain,
+    targetUsers,
+    skillsCount: skills.length,
+    policiesCount: policies.length,
+    preparedPromptsCount: preparedPrompts.length,
+    templatesCount: templates.length,
+    examplesCount: examples.length,
+    basics: [
+      `Name: ${name}`,
+      `ID: ${stringValue(draft.id, "Not set")}`,
+      `Version: ${stringValue(draft.version, "Not set")}`,
+      `Description: ${description}`,
+    ],
+    skills: skills.map((skill) => `${stringValue(skill.name, stringValue(skill.id, "Unnamed skill"))}: ${stringValue(skill.description, "No description")}`),
+    policies: policies.map((policy) => stringValue(policy.name, stringValue(policy.id, stringValue(policy.description, "Policy")))),
+    preparedPrompts: preparedPrompts.map((prompt) => `${stringValue(prompt.name, stringValue(prompt.id, "Prepared prompt"))}${prompt.documentLikeOutput === true ? " (document output)" : ""}`),
+    templates: templates.map((template) => stringValue(template.name, stringValue(template.id, stringValue(template.path, "Template")))),
+    examples: examples.map((example) => stringValue(example.name, stringValue(example.id, stringValue(example.prompt, "Example")))),
+  };
+}
+
+function summarizeChangeRequest(value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "Updated draft";
+  }
+  return trimmed.length > 70 ? `${trimmed.slice(0, 67)}...` : trimmed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function arrayOfRecords(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function stringValue(value: unknown, fallback: string) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function formatUnknownList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim() !== "").join(", ");
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
 function FieldError({ message }: { message?: string }) {
   if (!message) {
     return null;
@@ -6571,7 +7742,7 @@ function ValidationResults({
   report: ValidationReport | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Running validation with agentkitforge-core...</p>;
+    return <p className="state-copy">Checking this Agent Kit...</p>;
   }
 
   if (error) {
@@ -6583,7 +7754,7 @@ function ValidationResults({
   }
 
   if (!report) {
-    return <p className="state-copy">Select a kit folder and run validation to see results.</p>;
+    return <p className="state-copy">Run a check to see whether this kit needs attention.</p>;
   }
 
   const issuesBySeverity = groupIssuesBySeverity(report.issues);
@@ -6591,7 +7762,7 @@ function ValidationResults({
   return (
     <div className="validation-report">
       <div className={`status-banner ${report.valid ? "valid" : "invalid"}`}>
-        <strong>{report.valid ? "Valid" : "Invalid"}</strong>
+        <strong>{report.valid ? "Valid" : "Needs attention"}</strong>
         <span>{report.issues.length} issue{report.issues.length === 1 ? "" : "s"}</span>
       </div>
 
@@ -6602,9 +7773,13 @@ function ValidationResults({
         </div>
         <div>
           <dt>Root path</dt>
-          <dd>{report.rootPath}</dd>
+          <dd>{friendlyLocation(report.rootPath)}</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Show full path</summary>
+        <p className="inline-code">{report.rootPath}</p>
+      </details>
 
       {report.issues.length === 0 ? (
         <p className="state-copy">No validation issues found.</p>
@@ -6640,13 +7815,26 @@ function IssueGroup({
         {issues.map((issue, index) => (
           <li key={`${issue.code}-${issue.path ?? "root"}-${index}`}>
             <div className="issue-code">{issue.code}</div>
-            <p>{issue.message}</p>
+            <p>{friendlyValidationIssue(issue)}</p>
             {issue.path && <div className="issue-path">{issue.path}</div>}
           </li>
         ))}
       </ul>
     </section>
   );
+}
+
+function friendlyValidationIssue(issue: ValidationIssue) {
+  if (issue.code === "skill.required.missing") {
+    return "Add at least one skill before sharing or using this kit.";
+  }
+  if (issue.code === "manifest.skill_path.missing") {
+    return "A skill listed in the kit manifest is missing from the kit folder.";
+  }
+  if (issue.code.includes("required") || issue.code.includes("missing")) {
+    return `${issue.message} Add the missing item or regenerate the kit.`;
+  }
+  return issue.message;
 }
 
 function groupIssuesBySeverity(issues: ValidationIssue[]) {

@@ -175,6 +175,30 @@ select:disabled {
   white-space: nowrap;
 }
 
+.sidebar-help,
+.help-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sidebar-help button,
+.help-link-row button {
+  min-height: 32px;
+  padding: 0 10px;
+  color: var(--color-primary);
+  background: var(--color-sidebar-active);
+  border: 1px solid rgba(79, 70, 229, 0.24);
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.sidebar-help button {
+  color: #dbeafe;
+  background: #243149;
+  border-color: #33435c;
+}
+
 .main {
   min-width: 0;
 }
@@ -203,6 +227,15 @@ select:disabled {
   display: grid;
   gap: 7px;
   width: min(460px, 48vw);
+}
+
+.current-kit-input > div {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.compact-advanced {
+  padding: 8px 10px;
 }
 
 label {
@@ -419,9 +452,51 @@ textarea {
   font-size: 0.98rem;
 }
 
+.nested-guided-card {
+  background: var(--color-surface);
+}
+
 .guided-list-row {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
+}
+
+.guided-requirements-summary,
+.friendly-location-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--color-text-secondary);
+  background: var(--color-muted-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.guided-requirements-summary {
+  display: grid;
+  justify-content: stretch;
+}
+
+.artifact-explainer {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.artifact-explainer article,
+.compact-empty {
+  padding: 14px;
+  background: var(--color-muted-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.artifact-explainer p,
+.compact-empty p {
+  margin: 6px 0 0;
 }
 
 .wizard-nav {
@@ -610,7 +685,8 @@ textarea {
   gap: 10px;
 }
 
-.about-links a {
+.about-links a,
+.about-links button {
   display: inline-flex;
   align-items: center;
   min-height: 36px;
@@ -622,7 +698,8 @@ textarea {
   border-radius: 8px;
 }
 
-.about-links a:hover {
+.about-links a:hover,
+.about-links button:hover {
   background: #f2f5f8;
 }
 
@@ -981,6 +1058,21 @@ textarea {
   font-size: 0.95rem;
 }
 
+.draft-section-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.draft-section-grid ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+}
+
 .onefile-result {
   display: grid;
   gap: 16px;
@@ -1257,6 +1349,7 @@ textarea,
 .nav-item,
 .icon-button,
 .about-links a,
+.about-links button,
 .placeholder-card,
 .form-panel,
 .results-panel,
@@ -1424,7 +1517,8 @@ select,
 textarea,
 .icon-button,
 .secondary-button,
-.about-links a {
+.about-links a,
+.about-links button {
   color: var(--color-text);
   background: var(--color-surface);
   border-color: var(--color-border);
