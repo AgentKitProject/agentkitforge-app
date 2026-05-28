@@ -975,6 +975,7 @@ function MyKitsScreen({
       <div className="empty-state">
         <PackageOpen size={42} strokeWidth={1.8} />
         <h2>Loading kits</h2>
+        <LoadingStatus text="Reading My Kits library..." />
       </div>
     );
   }
@@ -1604,8 +1605,10 @@ function ImportPackagePanel({
 
       <button className="primary-button" disabled={isImporting} onClick={onImportPackage} type="button">
         <PackageOpen size={18} />
+        {isImporting && <InlineSpinner className="button-spinner" />}
         {isImporting ? "Importing" : "Import package"}
       </button>
+      {isImporting && <LoadingStatus text="Importing package and validating kit..." />}
 
       {importError && (
         <div className="error-state" role="alert">
@@ -1735,7 +1738,7 @@ function ImportFolderPanel({
         </details>
       )}
 
-      {isLoading && <p className="state-copy">Inspecting folder...</p>}
+      {isLoading && <LoadingStatus text="Inspecting folder..." />}
       {error && <div className="error-state" role="alert">{error}</div>}
 
       {inspection && !inspection.looksLikeAgentKit && (
@@ -1885,8 +1888,10 @@ function ImportGitPanel({
 
       <button className="primary-button" disabled={isImporting} onClick={onImport} type="button">
         <GitBranch size={18} />
+        {isImporting && <InlineSpinner className="button-spinner" />}
         {isImporting ? "Importing" : "Import repository"}
       </button>
+      {isImporting && <LoadingStatus text="Cloning repository, inspecting files, and validating kit..." />}
 
       {error && <div className="error-state" role="alert">{error}</div>}
 
@@ -3147,8 +3152,10 @@ function BuildScreen({
             type="button"
           >
             <Sparkles size={18} />
+            {isGeneratingDraft && <InlineSpinner className="button-spinner" />}
             {isGeneratingDraft ? "Generating" : "Generate Draft"}
           </button>
+          {isGeneratingDraft && <LoadingStatus text="Asking provider to build the first draft..." />}
         </div>
 
         <div className="results-panel">
@@ -3200,7 +3207,7 @@ function BuildScreen({
               label="Agent Kit"
               onChange={loadEditKit}
             />
-            {isLoadingEditDraft && <p className="state-copy">Loading kit draft...</p>}
+            {isLoadingEditDraft && <LoadingStatus text="Loading selected kit as an editable draft..." />}
             {editLoadError && <div className="error-state" role="alert">{editLoadError}</div>}
             {editDraftLoad && (
               <>
@@ -3305,7 +3312,7 @@ function BuildScreen({
               label="Agent Kit"
               onChange={loadGuidedEditKit}
             />
-            {isLoadingEditDraft && <p className="state-copy">Loading kit draft...</p>}
+            {isLoadingEditDraft && <LoadingStatus text="Loading selected kit as an editable draft..." />}
             {editLoadError && <div className="error-state" role="alert">{editLoadError}</div>}
             {editDraftLoad && (
               <div className="inline-warning">
@@ -3318,6 +3325,7 @@ function BuildScreen({
               onClick={saveGuidedUpdate}
               type="button"
             >
+              {isCreatingGuidedKit && <InlineSpinner className="button-spinner" />}
               {isCreatingGuidedKit ? "Saving" : "Save update"}
             </button>
           </div>
@@ -3479,6 +3487,7 @@ function BuildScreen({
 
         <button className="primary-button" disabled={isCreating} onClick={createKit} type="button">
           <Box size={18} />
+          {isCreating && <InlineSpinner className="button-spinner" />}
           {isCreating ? "Creating" : "Create"}
         </button>
         </div>
@@ -3563,6 +3572,7 @@ function BuildScreen({
             type="button"
           >
             <FileArchive size={18} />
+            {isRenderingDraft && <InlineSpinner className="button-spinner" />}
             {isRenderingDraft ? "Rendering" : "Render"}
           </button>
         </div>
@@ -4044,12 +4054,15 @@ function GuidedBuilder({
               </label>
               <div className="button-row">
                 <button className="primary-button" disabled={isCreating} onClick={() => onCreate("create")} type="button">
+                  {isCreating && <InlineSpinner className="button-spinner" />}
                   {isCreating ? "Creating" : "Create Agent Kit"}
                 </button>
                 <button className="secondary-button" disabled={isCreating} onClick={() => onCreate("validate")} type="button">
+                  {isCreating && <InlineSpinner className="button-spinner" />}
                   Create and Validate
                 </button>
                 <button className="secondary-button" disabled={isCreating} onClick={() => onCreate("validate-add")} type="button">
+                  {isCreating && <InlineSpinner className="button-spinner" />}
                   Create, Validate, and Add to My Kits
                 </button>
               </div>
@@ -4066,7 +4079,8 @@ function GuidedBuilder({
 
         <div className="results-panel">
           <div className="panel-label">Guided Builder Result</div>
-          {!result && !validationReport && <p className="state-copy">Complete the steps, then create the kit from Review & Create.</p>}
+          {isCreating && <LoadingStatus text="Creating Agent Kit and running selected follow-up actions..." />}
+          {!isCreating && !result && !validationReport && <p className="state-copy">Complete the steps, then create the kit from Review & Create.</p>}
           {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
           {result && (
             <div className="create-result">
@@ -4386,6 +4400,7 @@ function ValidateScreen({
           type="button"
         >
           <CheckCircle2 size={18} />
+          {isValidating && <InlineSpinner className="button-spinner" />}
           {isValidating ? "Validating" : "Validate"}
         </button>
       </div>
@@ -5236,6 +5251,7 @@ function UseScreen({
             type="button"
           >
             <PlayCircle size={18} />
+            {isRunning && <InlineSpinner className="button-spinner" />}
             {isRunning ? "Running" : "Run with AI"}
           </button>
         </div>
@@ -5353,6 +5369,7 @@ function UseScreen({
             type="button"
           >
             <FileArchive size={18} />
+            {isExporting && <InlineSpinner className="button-spinner" />}
             {isExporting ? "Exporting" : "Export one-file Markdown"}
           </button>
         </div>
@@ -5661,6 +5678,7 @@ function PackageExportScreen({
             type="button"
           >
             <PackageOpen size={18} />
+            {isPackaging && <InlineSpinner className="button-spinner" />}
             {isPackaging ? "Packaging" : "Package .agentkit.zip"}
           </button>
           <button
@@ -5670,6 +5688,7 @@ function PackageExportScreen({
             type="button"
           >
             <FileArchive size={18} />
+            {isExportingOneFile && <InlineSpinner className="button-spinner" />}
             {isExportingOneFile ? "Exporting" : "Export .onefile.md"}
           </button>
         </div>
@@ -5990,6 +6009,7 @@ function InstallTargetsScreen({
 
           <button className="primary-button" disabled={isExporting} onClick={exportToCodex} type="button">
             <Plug size={18} />
+            {isExporting && <InlineSpinner className="button-spinner" />}
             {isExporting ? "Exporting" : "Export/Install to Codex"}
           </button>
         </div>
@@ -6092,6 +6112,7 @@ function InstallTargetsScreen({
 
           <button className="primary-button" disabled={isExportingClaude} onClick={exportToClaudeCode} type="button">
             <Plug size={18} />
+            {isExportingClaude && <InlineSpinner className="button-spinner" />}
             {isExportingClaude ? "Exporting" : "Export/Install to Claude Code"}
           </button>
         </div>
@@ -6134,7 +6155,7 @@ function CodexExportResults({
   validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Exporting Codex skills...</p>;
+    return <LoadingStatus text="Validating kit and exporting to Codex..." />;
   }
 
   if (error && !result) {
@@ -6285,7 +6306,7 @@ function ClaudeCodeExportResults({
   validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Exporting Claude Code plugin...</p>;
+    return <LoadingStatus text="Validating kit and exporting to Claude Code..." />;
   }
 
   if (error && !result) {
@@ -6396,7 +6417,7 @@ function PackageExportResults({
   validationReport: ValidationReport | null;
 }) {
   if (isLoading && artifacts.length === 0 && !error) {
-    return <p className="state-copy">Creating artifact...</p>;
+    return <LoadingStatus text="Creating export artifact..." />;
   }
 
   return (
@@ -6496,7 +6517,7 @@ function ForgeRunResults({
   validationProfile: ValidationProfile;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Validating the kit and running it with the selected AI provider...</p>;
+    return <LoadingStatus text="Validating kit, building context, and waiting for provider response..." />;
   }
 
   if (error && !result) {
@@ -6540,6 +6561,7 @@ function ForgeRunResults({
             onClick={onSaveResult}
             type="button"
           >
+            {isSavingResponse && <InlineSpinner className="button-spinner" />}
             {isSavingResponse ? "Saving" : "Download as Markdown"}
           </button>
           <button
@@ -6548,6 +6570,7 @@ function ForgeRunResults({
             onClick={onSaveResultText}
             type="button"
           >
+            {isSavingResponse && <InlineSpinner className="button-spinner" />}
             Download as Text
           </button>
           <button className="secondary-button compact-button" onClick={onClearResult} type="button">
@@ -6626,7 +6649,7 @@ function StarterHintPanel({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   if (isLoading) {
-    return <p className="state-copy compact-state">Checking for starter guidance...</p>;
+    return <LoadingStatus text="Checking for starter guidance..." />;
   }
 
   if (error) {
@@ -6856,7 +6879,7 @@ function PreparedPromptSelector({
   selectedPromptId: string;
 }) {
   if (isLoading) {
-    return <p className="state-copy compact-state">Loading prepared prompts...</p>;
+    return <LoadingStatus text="Loading prepared prompts..." />;
   }
 
   if (prompts.length === 0) {
@@ -7066,7 +7089,7 @@ function PromptPreview({
         Copy preview
       </button>
       {isRendering ? (
-        <p className="state-copy compact-state">Rendering prompt preview...</p>
+        <LoadingStatus text="Rendering prompt preview..." />
       ) : (
         <pre className="json-panel">{preview || "Fill required inputs to preview the prompt."}</pre>
       )}
@@ -7243,7 +7266,7 @@ function OneFileExportResults({
   result: ExportAgentKitResult | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Exporting Agent Kit instructions...</p>;
+    return <LoadingStatus text="Exporting one-file Markdown..." />;
   }
 
   if (error && !result) {
@@ -8506,6 +8529,7 @@ function SettingsScreen({
 
       <div className="button-row">
         <button className="primary-button" disabled={isSavingKey} onClick={saveProvider} type="button">
+          {isSavingKey && <InlineSpinner className="button-spinner" />}
           {isSavingKey ? "Saving" : "Save provider"}
         </button>
         <button className="secondary-button" onClick={() => setProviderForm(defaultProviderForm(settings))} type="button">
@@ -8517,9 +8541,11 @@ function SettingsScreen({
           onClick={testOpenAIConnection}
           type="button"
         >
+          {isTestingConnection && <InlineSpinner className="button-spinner" />}
           {isTestingConnection ? "Testing" : "Test selected provider"}
         </button>
       </div>
+      {isTestingConnection && <LoadingStatus text="Testing provider connection..." />}
 
       <div className="inline-warning">
         Settings are stored as local app data at {settings.settingsPath || "the app-local settings file"}.
@@ -8633,6 +8659,7 @@ function SettingsScreen({
         onClick={savePreferences}
         type="button"
       >
+        {isSavingPreferences && <InlineSpinner className="button-spinner" />}
         {isSavingPreferences ? "Saving" : "Save preferences"}
       </button>
     </div>
@@ -8709,7 +8736,7 @@ function CreateAgentKitResults({
   validationProfile: ValidationProfile;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Creating kit from template...</p>;
+    return <LoadingStatus text="Creating Agent Kit from template..." />;
   }
 
   if (error) {
@@ -8784,7 +8811,7 @@ function RenderAgentKitDraftResults({
   result: RenderAgentKitDraftResult | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Rendering Agent Kit from draft JSON...</p>;
+    return <LoadingStatus text="Rendering Agent Kit from draft JSON..." />;
   }
 
   if (error) {
@@ -8903,7 +8930,7 @@ function GeneratedDraftResults({
   updateLabel?: string;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Generating AgentKitDraft JSON with the selected AI provider...</p>;
+    return <LoadingStatus text="Asking provider and validating draft response..." />;
   }
 
   if (error) {
@@ -8982,8 +9009,10 @@ function GeneratedDraftResults({
           type="button"
         >
           <Sparkles size={18} />
+          {isRevising && <InlineSpinner className="button-spinner" />}
           {isRevising ? "Requesting changes" : "Request Changes"}
         </button>
+        {isRevising && <LoadingStatus text="Asking provider for an updated draft..." />}
       </div>
 
       {result.session && (
@@ -9082,6 +9111,7 @@ function GeneratedDraftResults({
           type="button"
         >
           <FileArchive size={18} />
+          {isRenderingDraft && <InlineSpinner className="button-spinner" />}
           {isRenderingDraft ? "Saving" : saveLabel}
         </button>
         {onSaveUpdate && (
@@ -9091,9 +9121,11 @@ function GeneratedDraftResults({
             onClick={onSaveUpdate}
             type="button"
           >
+            {isRenderingDraft && <InlineSpinner className="button-spinner" />}
             {isRenderingDraft ? "Saving" : updateLabel || "Save update"}
           </button>
         )}
+        {isRenderingDraft && <LoadingStatus text="Saving kit files..." />}
 
         {renderError && (
           <div className="error-state" role="alert">
@@ -9305,6 +9337,19 @@ function FieldError({ message }: { message?: string }) {
   return <div className="field-error">{message}</div>;
 }
 
+function InlineSpinner({ className = "" }: { className?: string }) {
+  return <span aria-hidden="true" className={`inline-spinner ${className}`} />;
+}
+
+function LoadingStatus({ text }: { text: string }) {
+  return (
+    <div className="loading-status" role="status" aria-live="polite">
+      <InlineSpinner />
+      <span>{text}</span>
+    </div>
+  );
+}
+
 function validateCreateForm(form: CreateAgentKitInput) {
   const errors: Partial<Record<keyof CreateAgentKitInput, string>> = {};
 
@@ -9383,7 +9428,7 @@ function ValidationResults({
   report: ValidationReport | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Checking this Agent Kit...</p>;
+    return <LoadingStatus text="Validating kit..." />;
   }
 
   if (error) {

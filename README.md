@@ -96,6 +96,12 @@ The UI uses the AgentKitForge light palette by default. Dark mode is available f
 
 To regenerate app/taskbar icons after changing the SVG source, run `npx tauri icon src/assets/brand/agentkitforge-icon.svg`. No code signing or release upload is configured yet.
 
+## Layout and Status Feedback
+
+The app shell is designed to resize from desktop windows down to narrow desktop layouts. Cards, step controls, forms, JSON panels, file lists, and long paths wrap or scroll inside their own panels so wide content does not stretch the whole app.
+
+Long-running actions show visible status text and disable their triggering buttons while running. This includes AI draft generation, AI revision requests, Use inside Forge, provider connection tests, validation, import, render, package/export, and install target export.
+
 ### Build Verification Checklist
 
 - Run `npm run check`.
