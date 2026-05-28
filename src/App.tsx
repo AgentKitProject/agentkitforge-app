@@ -598,6 +598,10 @@ const navItems: NavItem[] = [
   { id: "about", label: "About", icon: Info },
 ];
 
+const secondarySectionTitles: Partial<Record<ExtendedSectionId, string>> = {
+  validate: "Validate Kit",
+};
+
 export function App() {
   const [activeSection, setActiveSection] = useState<ExtendedSectionId>("my-kits");
   const [settings, setSettings] = useState<PublicSettings>({
@@ -624,7 +628,7 @@ export function App() {
   });
 
   const activeTitle = useMemo(
-    () => navItems.find((item) => item.id === activeSection)?.label ?? "AgentKitForge",
+    () => navItems.find((item) => item.id === activeSection)?.label ?? secondarySectionTitles[activeSection] ?? "AgentKitForge",
     [activeSection],
   );
 
@@ -1076,7 +1080,7 @@ function MyKitsScreen({
               </button>
             </div>
             <p className="form-copy compact-state">
-              Remove from My Kits removes this kit from your library list. It does not delete files.
+              This removes the kit from your library list. It does not delete the files.
             </p>
           </article>
         ))}
@@ -1580,7 +1584,7 @@ function ImportPackagePanel({
         />
       </details>
 
-      <label htmlFor="import-validation-profile">Validation profile</label>
+      <LabelWithHelp htmlFor="import-validation-profile" label="Validation level" help="Choose how strict the import check should be." />
       <select
         id="import-validation-profile"
         onChange={(event) => onUpdateForm("validationProfile", event.target.value as ValidationProfile)}
@@ -1873,7 +1877,7 @@ function ImportGitPanel({
         />
       </details>
 
-      <label htmlFor="git-validation-profile">Validation profile</label>
+      <LabelWithHelp htmlFor="git-validation-profile" label="Validation level" help="Choose how strict the imported repository should be checked." />
       <select
         id="git-validation-profile"
         onChange={(event) => onUpdateForm("validationProfile", event.target.value as ValidationProfile)}
@@ -3618,7 +3622,10 @@ function BuildModePicker({
                 >
                   <Icon size={22} />
                   <span>
-                    <strong>{mode.title}</strong>
+                    <strong>
+                      {mode.title}
+                      <HelpTip focusable={false} text={mode.description} />
+                    </strong>
                     <small>{mode.description}</small>
                     <em>{mode.bestFor}</em>
                   </span>
@@ -4354,7 +4361,12 @@ function ValidateScreen({
   return (
     <div className="form-layout">
       <div className="form-panel">
-        <label htmlFor="validate-kit-folder">Select kit folder</label>
+        <h2>Validation Tool</h2>
+        <p className="form-copy">
+          Validation is usually run from Build, Import, Use, Package / Export, Install Targets, or My Kits.
+          This secondary tool is available when you want to check a folder directly.
+        </p>
+        <LabelWithHelp htmlFor="validate-kit-folder" label="Agent Kit folder" help="Choose the folder that contains the Agent Kit files you want to check." />
         <div className="path-picker">
           <input
             id="validate-kit-folder"
@@ -4376,7 +4388,7 @@ function ValidateScreen({
           </button>
         </div>
 
-        <label htmlFor="validation-profile">Validation profile</label>
+        <LabelWithHelp htmlFor="validation-profile" label="Validation level" help="Choose how strict this check should be." />
         <select
           id="validation-profile"
           disabled={isValidating}
@@ -5092,7 +5104,10 @@ function UseScreen({
           />
 
           <details className="advanced-details">
-            <summary>Advanced Settings</summary>
+            <summary>
+              Advanced Settings
+              <HelpTip text="Optional controls for context, validation, references, and response length." />
+            </summary>
           <LabelWithHelp
             htmlFor="runtime-context"
             label="Additional context"
@@ -5110,7 +5125,7 @@ function UseScreen({
           />
           <div className="settings-grid two-column">
             <div>
-              <label htmlFor="runtime-context-mode">Context mode</label>
+              <LabelWithHelp htmlFor="runtime-context-mode" label="Context mode" help="All includes the kit broadly. Triggered uses the best-matching skills first." />
               <select
                 id="runtime-context-mode"
                 onChange={(event) => setContextMode(event.target.value as AgentKitContextMode)}
@@ -5124,7 +5139,7 @@ function UseScreen({
               </select>
             </div>
             <div>
-              <label htmlFor="runtime-target">Target</label>
+              <LabelWithHelp htmlFor="runtime-target" label="Target" help="Tunes context for the selected AI runtime format." />
               <select
                 id="runtime-target"
                 onChange={(event) => setContextTarget(event.target.value as AgentKitContextTarget)}
@@ -5141,7 +5156,7 @@ function UseScreen({
 
           <div className="settings-grid two-column">
             <div>
-              <label htmlFor="runtime-validation-profile">Validation profile</label>
+              <LabelWithHelp htmlFor="runtime-validation-profile" label="Validation level" help="Choose how strict the pre-run kit check should be." />
               <select
                 id="runtime-validation-profile"
                 onChange={(event) => setValidationProfile(event.target.value as ValidationProfile)}
@@ -5162,10 +5177,11 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Validate before running</span>
+              <HelpTip text="Blocks the run if the kit has validation issues unless you turn this off." />
             </label>
           </div>
 
-          <label htmlFor="runtime-max-skills">Max skills</label>
+          <LabelWithHelp htmlFor="runtime-max-skills" label="Max skills" help="Optional limit for triggered mode when the kit has many skills." />
           <input
             disabled={contextMode !== "triggered"}
             id="runtime-max-skills"
@@ -5185,6 +5201,7 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Include policies</span>
+              <HelpTip text="Adds guardrails from the kit to the AI context." />
             </label>
             <label className="checkbox-row" htmlFor="include-templates">
               <input
@@ -5194,6 +5211,7 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Include templates</span>
+              <HelpTip text="Adds output templates when the kit defines them." />
             </label>
             <label className="checkbox-row" htmlFor="include-workflows">
               <input
@@ -5203,6 +5221,7 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Include workflows</span>
+              <HelpTip text="Adds workflow instructions when the kit defines them." />
             </label>
             <label className="checkbox-row" htmlFor="include-references">
               <input
@@ -5212,6 +5231,7 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Include references</span>
+              <HelpTip text="References can be large, so they are usually off by default." />
             </label>
             <label className="checkbox-row" htmlFor="include-prompts">
               <input
@@ -5221,10 +5241,11 @@ function UseScreen({
                 type="checkbox"
               />
               <span>Include prepared prompts</span>
+              <HelpTip text="Includes reusable prompt definitions in the kit context." />
             </label>
           </div>
 
-          <label htmlFor="runtime-max-output">Max output tokens</label>
+          <LabelWithHelp htmlFor="runtime-max-output" label="Max output tokens" help="Optional response length limit for the selected provider." />
           <input
             id="runtime-max-output"
             min="256"
@@ -5293,19 +5314,27 @@ function UseScreen({
           <div className="artifact-explainer">
             <article>
               <strong>Use inside Forge</strong>
+              <HelpTip text="AgentKitForge sends your prompt and kit context to your selected AI provider." />
               <p>AgentKitForge runs the kit with your selected AI provider.</p>
             </article>
             <article>
               <strong>Prepare for Web Assistant</strong>
+              <HelpTip text="Creates a Markdown file and starter prompt for manual upload or paste." />
               <p>Creates a file and prompt for manual upload or paste into web assistants.</p>
             </article>
             <article>
               <strong>Install Targets</strong>
+              <HelpTip text="Copies or exports kit content into supported external tool folders." />
               <p>Exports the kit into supported tools like Codex or Claude Code.</p>
+            </article>
+            <article>
+              <strong>Package / Export</strong>
+              <HelpTip text="Creates shareable kit files without installing them into another tool." />
+              <p>Creates shareable package artifacts for import, sharing, or manual use.</p>
             </article>
           </div>
 
-          <label htmlFor="use-kit">Select kit folder</label>
+          <LabelWithHelp htmlFor="use-kit" label="Agent Kit" help="Choose the kit to prepare for manual use in a web assistant." />
           <div className="path-picker">
             <input
               id="use-kit"
@@ -5330,7 +5359,7 @@ function UseScreen({
           </div>
           <FieldError message={fieldErrors.kitPath} />
 
-          <label htmlFor="onefile-output">Output file path or folder</label>
+          <LabelWithHelp htmlFor="onefile-output" label="Output file or folder" help="Choose where to save the one-file Markdown bundle." />
           <div className="path-picker double-action">
             <input
               id="onefile-output"
@@ -5619,10 +5648,12 @@ function PackageExportScreen({
         <div className="artifact-explainer">
           <article>
             <strong>Full Agent Kit Package (.agentkit.zip)</strong>
+            <HelpTip text="A complete portable kit package for import, sharing, or future publishing." />
             <p>Best for importing into AgentKitForge, sharing, or publishing later. Includes structure, metadata, skills, policies, prompts, templates, examples, and other kit files.</p>
           </article>
           <article>
             <strong>One-File Markdown (.onefile.md)</strong>
+            <HelpTip text="A manual-use Markdown bundle for web assistants, not a full package." />
             <p>Best for uploading or pasting into web assistants like ChatGPT or Claude. Easier to use manually, but not a full Agent Kit package.</p>
           </article>
         </div>
@@ -5656,7 +5687,7 @@ function PackageExportScreen({
           <span>Run validation before packaging</span>
         </label>
 
-        <label htmlFor="package-validation-profile">Validation profile</label>
+        <LabelWithHelp htmlFor="package-validation-profile" label="Validation level" help="Choose how strict the check should be before creating artifacts." />
         <select
           disabled={!validateBeforePackaging}
           id="package-validation-profile"
@@ -7280,8 +7311,9 @@ function OneFileExportResults({
   if (!result) {
     return (
       <p className="state-copy">
-        Export a selected kit into one Markdown file for use with ChatGPT, Claude, or another web
-        assistant. If you choose a folder, AgentKitForge uses the default name
+        Prepare a selected kit for manual use in ChatGPT, Claude, or another web assistant.
+        AgentKitForge creates one Markdown file plus a starter prompt; it does not install anything.
+        If you choose a folder, AgentKitForge uses the default name
         <span className="inline-code"> &lt;kit-id&gt;-&lt;version&gt;.onefile.md</span>.
       </p>
     );
@@ -8097,9 +8129,9 @@ function LabelWithHelp({
   );
 }
 
-function HelpTip({ text }: { text: string }) {
+function HelpTip({ focusable = true, text }: { focusable?: boolean; text: string }) {
   return (
-    <span className="help-tip" tabIndex={0}>
+    <span className="help-tip" tabIndex={focusable ? 0 : -1}>
       ?
       <span className="help-tip-content">{text}</span>
     </span>

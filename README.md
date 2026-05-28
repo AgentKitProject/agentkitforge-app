@@ -405,6 +405,8 @@ The response metadata panel shows the kit name when available, model used, conte
 
 Validation is contextual rather than a primary workflow. You can validate from My Kits, Build result panels, Import results, before Use with **Validate before running**, before Package / Export, and before Install Targets. When validation finds issues, the app shows **Needs attention** with issues grouped by severity; full paths and technical details stay under Advanced sections.
 
+When a contextual action opens the secondary **Validate Kit** tool, it is for checking the selected kit directly. It is not shown as a primary sidebar workflow.
+
 ## Install Targets
 
 Use **Install Targets** to export an Agent Kit into tool-specific local formats.
@@ -464,7 +466,7 @@ My Kits is a local-only library of Agent Kit folders on this machine. It is for 
 
 When My Kits has entries, it stays focused on library actions only: use, validate, package/export, install target, open folder, refresh, or remove from the library. Import and add-folder workflows live in the separate **Import** section. If the library is empty, My Kits shows shortcuts for Build with AI, Guided Builder, and Import Agent Kit.
 
-Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. **Remove from My Kits** only removes the local library entry; it does not delete files from disk.
+Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. **Remove from My Kits** only removes the local library entry; it does not delete files from disk. The app copy states: "This removes the kit from your library list. It does not delete the files."
 
 Each kit has a **Details** panel. It uses `agentkitforge-core` `getAgentKitSummary` where available to show friendly sections:
 
