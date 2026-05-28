@@ -373,14 +373,6 @@ type AgentKitContextDetails = {
   approximateContextLength: number;
 };
 
-type RequiredInputFields = {
-  audience: string;
-  timeframe: string;
-  environment: string;
-  fileNotes: string;
-  other: string;
-};
-
 type GuidedBuilderStep =
   | "basics"
   | "skills"
@@ -589,13 +581,12 @@ const appVersion = "0.1.0";
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
-  { id: "import", label: "Import", icon: FileArchive },
   { id: "build", label: "Build", icon: Hammer },
   { id: "use", label: "Use", icon: PlayCircle },
+  { id: "import", label: "Import", icon: FileArchive },
   { id: "package-export" as ExtendedSectionId, label: "Package / Export", icon: FolderOutput },
-  { id: "install-targets", label: "Install Targets", icon: Plug },
+  { id: "install-targets", label: "Install on Local Agent", icon: Plug },
   { id: "settings", label: "Settings", icon: Settings },
-  { id: "about", label: "About", icon: Info },
 ];
 
 const secondarySectionTitles: Partial<Record<ExtendedSectionId, string>> = {
@@ -749,19 +740,6 @@ export function App() {
           <div>
             <p className="eyebrow">Agent Kit workspace</p>
             <h1>{activeTitle}</h1>
-          </div>
-          <div className="current-kit-input">
-            <label>Selected kit</label>
-            <div>{appState.currentKitName || "No kit selected"}</div>
-            <details className="advanced-details compact-advanced">
-              <summary>Show full path</summary>
-              <input
-                id="current-kit-path"
-                onChange={(event) => updateAppState("currentKitPath", event.target.value)}
-                placeholder="Selected kit path"
-                value={appState.currentKitPath}
-              />
-            </details>
           </div>
         </header>
 
@@ -4363,7 +4341,7 @@ function ValidateScreen({
       <div className="form-panel">
         <h2>Validation Tool</h2>
         <p className="form-copy">
-          Validation is usually run from Build, Import, Use, Package / Export, Install Targets, or My Kits.
+          Validation is usually run from Build, Import, Use, Package / Export, Install on Local Agent, or My Kits.
           This secondary tool is available when you want to check a folder directly.
         </p>
         <LabelWithHelp htmlFor="validate-kit-folder" label="Agent Kit folder" help="Choose the folder that contains the Agent Kit files you want to check." />
@@ -4447,20 +4425,15 @@ function UseScreen({
   const [isRenderingPrompt, setIsRenderingPrompt] = useState(false);
   const [userTask, setUserTask] = useState("");
   const [additionalContext, setAdditionalContext] = useState("");
-  const [requiredInputs, setRequiredInputs] = useState<RequiredInputFields>({
-    audience: "",
-    timeframe: "",
-    environment: "",
-    fileNotes: "",
-    other: "",
-  });
   const [providerId, setProviderId] = useState(settings.defaultAiProviderId || "");
   const [model, setModel] = useState(settings.defaultModel || defaultRuntimeModel);
   const [maxOutputLength, setMaxOutputLength] = useState("1800");
   const [contextMode, setContextMode] = useState<AgentKitContextMode>(settings.preferredContextMode);
   const [contextTarget, setContextTarget] = useState<AgentKitContextTarget>("openai");
   const [validationProfile, setValidationProfile] = useState<ValidationProfile>(settings.preferredValidationProfile);
-  const [validateBeforeRun, setValidateBeforeRun] = useState(true);
+  const [validateBeforeRun, setValidateBeforeRun] = useState(
+    () => window.localStorage.getItem("agentkitforge.defaultValidateBeforeRun") !== "false",
+  );
   const [includePolicies, setIncludePolicies] = useState(settings.includePolicies);
   const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
   const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
@@ -4487,7 +4460,6 @@ function UseScreen({
   const [result, setResult] = useState<ExportAgentKitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ kitPath?: string; outputPath?: string }>({});
-  const [isSelectingKit, setIsSelectingKit] = useState(false);
   const [isSelectingOutput, setIsSelectingOutput] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
@@ -4495,6 +4467,9 @@ function UseScreen({
   const selectedPrompt = preparedPrompts.find((prompt) => prompt.id === selectedPromptId);
   const selectedKit = myKits.find((kit) => pathsEqualLoose(kit.path, kitPath));
   const activePromptForRun = promptMode === "prepared" ? selectedPrompt : undefined;
+  const unresolvedPromptVariables = activePromptForRun
+    ? findUnresolvedPromptVariables(renderedPreparedPrompt)
+    : [];
 
   useEffect(() => {
     setKitPath(currentKitPath);
@@ -4638,30 +4613,6 @@ function UseScreen({
     };
   }, [kitPath]);
 
-  async function selectKitFolder() {
-    setIsSelectingKit(true);
-    setError(null);
-    setRunError(null);
-
-    try {
-      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
-      if (selectedPath) {
-        updateSelectedUseKitPath(selectedPath);
-        onKitPathChange(selectedPath);
-        setResult(null);
-        setRunResult(null);
-        setFieldErrors((current) => ({ ...current, kitPath: undefined }));
-        setRunFieldErrors((current) => ({ ...current, kitPath: undefined }));
-      }
-    } catch (caughtError) {
-      const message = errorToMessage(caughtError);
-      setError(message);
-      setRunError(message);
-    } finally {
-      setIsSelectingKit(false);
-    }
-  }
-
   function updateSelectedUseKitPath(path: string) {
     setKitPath(path);
     setResult(null);
@@ -4696,6 +4647,7 @@ function UseScreen({
 
   async function runInsideForge() {
     const taskForRun = activePromptForRun ? renderedPreparedPrompt : userTask;
+    const unresolvedVariables = activePromptForRun ? findUnresolvedPromptVariables(taskForRun) : [];
     const validationErrors = validateRunForm(settings, providerId, kitPath, taskForRun);
     setRunFieldErrors(validationErrors);
     setRunError(null);
@@ -4716,6 +4668,11 @@ function UseScreen({
 
     if (activePromptForRun && !renderedPreparedPrompt.trim()) {
       setRunError("Complete the prompt inputs so AgentKitForge can preview the prepared prompt before running.");
+      return;
+    }
+
+    if (unresolvedVariables.length > 0) {
+      setRunError(`This prepared prompt still has unresolved inputs: ${unresolvedVariables.join(", ")}.`);
       return;
     }
 
@@ -4741,7 +4698,7 @@ function UseScreen({
         input: {
           kitPath,
           userTask: taskForRun,
-          additionalContext: combineAdditionalContext(requiredInputs, additionalContext),
+          additionalContext: additionalContext.trim(),
           providerId,
           model,
           maxOutputLength: Number.parseInt(maxOutputLength, 10) || undefined,
@@ -4938,9 +4895,7 @@ function UseScreen({
 
           <UseKitSelector
             currentKitPath={kitPath}
-            isSelecting={isSelectingKit || isRunning || isExporting}
             kits={myKits}
-            onAddExisting={selectKitFolder}
             onChange={(nextPath) => {
               updateSelectedUseKitPath(nextPath);
               onKitPathChange(nextPath);
@@ -5030,6 +4985,11 @@ function UseScreen({
           {promptValidationReport && !promptValidationReport.valid && (
             <IssueGroup issues={promptValidationReport.issues} severity="error" />
           )}
+          {unresolvedPromptVariables.length > 0 && (
+            <div className="error-state" role="alert">
+              This prepared prompt still has unresolved inputs: {unresolvedPromptVariables.join(", ")}.
+            </div>
+          )}
           {promptError && <div className="error-state" role="alert">{promptError}</div>}
 
           <StarterHintPanel
@@ -5038,58 +4998,27 @@ function UseScreen({
             isLoading={isLoadingStarterHint}
           />
 
-          {promptMode === "custom" && <div className="required-inputs-panel">
-            <div className="panel-heading">
-              <h3>Additional required inputs</h3>
-              <HelpTip text="Some kits need details such as audience, time period, project, or source-file notes. Add those here before running." />
-            </div>
-            <div className="settings-grid two-column">
-              <div>
-                <label htmlFor="required-audience">Audience</label>
-                <input
-                  id="required-audience"
-                  onChange={(event) => setRequiredInputs((current) => ({ ...current, audience: event.target.value }))}
-                  placeholder="Who is this for?"
-                  value={requiredInputs.audience}
-                />
-              </div>
-              <div>
-                <label htmlFor="required-timeframe">Reporting period or timeframe</label>
-                <input
-                  id="required-timeframe"
-                  onChange={(event) => setRequiredInputs((current) => ({ ...current, timeframe: event.target.value }))}
-                  placeholder="Q2, this month, launch week..."
-                  value={requiredInputs.timeframe}
-                />
-              </div>
-              <div>
-                <label htmlFor="required-environment">Project, environment, or account</label>
-                <input
-                  id="required-environment"
-                  onChange={(event) => setRequiredInputs((current) => ({ ...current, environment: event.target.value }))}
-                  placeholder="Project name, namespace, account type..."
-                  value={requiredInputs.environment}
-                />
-              </div>
-              <div>
-                <label htmlFor="required-file-notes">Files or source material</label>
-                <input
-                  id="required-file-notes"
-                  onChange={(event) => setRequiredInputs((current) => ({ ...current, fileNotes: event.target.value }))}
-                  placeholder="Describe files for now; upload support comes later."
-                  value={requiredInputs.fileNotes}
-                />
-              </div>
-            </div>
-            <label htmlFor="required-other">Other inputs</label>
-            <textarea
-              id="required-other"
-              onChange={(event) => setRequiredInputs((current) => ({ ...current, other: event.target.value }))}
-              placeholder="Any other required facts, assumptions, or constraints."
-              rows={3}
-              value={requiredInputs.other}
+          <details className="advanced-details">
+            <summary>
+              Additional Context
+              <HelpTip text="Optional. Add extra notes, constraints, or background for this run." />
+            </summary>
+            <LabelWithHelp
+              htmlFor="runtime-context"
+              label="Additional context"
+              help="Optional. Add extra notes, constraints, or background for this run."
             />
-          </div>}
+            <textarea
+              id="runtime-context"
+              onChange={(event) => {
+                setAdditionalContext(event.target.value);
+                setRunResult(null);
+              }}
+              placeholder="Optional notes, constraints, or background for this run."
+              rows={4}
+              value={additionalContext}
+            />
+          </details>
 
           <LabelWithHelp
             htmlFor="runtime-model"
@@ -5108,21 +5037,6 @@ function UseScreen({
               Advanced Settings
               <HelpTip text="Optional controls for context, validation, references, and response length." />
             </summary>
-          <LabelWithHelp
-            htmlFor="runtime-context"
-            label="Additional context"
-            help="Optional details to include after the prepared prompt, such as notes or constraints."
-          />
-          <textarea
-            id="runtime-context"
-            onChange={(event) => {
-              setAdditionalContext(event.target.value);
-              setRunResult(null);
-            }}
-            placeholder="Optional details such as source notes, assumptions, examples, or review criteria."
-            rows={4}
-            value={additionalContext}
-          />
           <div className="settings-grid two-column">
             <div>
               <LabelWithHelp htmlFor="runtime-context-mode" label="Context mode" help="All includes the kit broadly. Triggered uses the best-matching skills first." />
@@ -5258,7 +5172,6 @@ function UseScreen({
           <PromptPreview
             additionalContext={additionalContext}
             preparedPrompt={activePromptForRun}
-            requiredInputs={requiredInputs}
             renderedPrompt={renderedPreparedPrompt}
             isRendering={isRenderingPrompt}
             mode={promptMode}
@@ -5323,7 +5236,7 @@ function UseScreen({
               <p>Creates a file and prompt for manual upload or paste into web assistants.</p>
             </article>
             <article>
-              <strong>Install Targets</strong>
+              <strong>Install on Local Agent</strong>
               <HelpTip text="Copies or exports kit content into supported external tool folders." />
               <p>Exports the kit into supported tools like Codex or Claude Code.</p>
             </article>
@@ -5335,28 +5248,24 @@ function UseScreen({
           </div>
 
           <LabelWithHelp htmlFor="use-kit" label="Agent Kit" help="Choose the kit to prepare for manual use in a web assistant." />
-          <div className="path-picker">
-            <input
-              id="use-kit"
-              onChange={(event) => {
-                const nextPath = event.target.value;
-                setKitPath(nextPath);
-                onKitPathChange(nextPath);
-                setResult(null);
-              }}
-              placeholder="Choose an Agent Kit"
-              value={kitPath}
-            />
-            <button
-              className="icon-button"
-              disabled={isSelectingKit || isExporting || isRunning}
-              onClick={selectKitFolder}
-              title="Select kit folder"
-              type="button"
-            >
-              <FolderOpen size={18} />
-            </button>
-          </div>
+          <select
+            disabled={isExporting || isRunning}
+            id="use-kit"
+            onChange={(event) => {
+              const nextPath = event.target.value;
+              setKitPath(nextPath);
+              onKitPathChange(nextPath);
+              setResult(null);
+            }}
+            value={kitPath}
+          >
+            <option value="">Choose from My Kits</option>
+            {myKits.map((kit) => (
+              <option key={kit.path} value={kit.path}>
+                {kit.name} ({kit.version})
+              </option>
+            ))}
+          </select>
           <FieldError message={fieldErrors.kitPath} />
 
           <LabelWithHelp htmlFor="onefile-output" label="Output file or folder" help="Choose where to save the one-file Markdown bundle." />
@@ -5958,6 +5867,13 @@ function InstallTargetsScreen({
 
   return (
     <div className="install-targets-screen">
+      <section className="form-panel">
+        <h2>Install on Local Agent</h2>
+        <p className="form-copy">
+          Export Agent Kits into local agent tools like Codex or Claude Code. AgentKitForge copies files into
+          the target tool folder; it does not launch or verify the external tool.
+        </p>
+      </section>
       <div className="build-layout">
         <div className="form-panel">
           <h2>Export to Codex</h2>
@@ -6725,16 +6641,12 @@ function StarterHintPanel({
 
 function UseKitSelector({
   currentKitPath,
-  isSelecting,
   kits,
-  onAddExisting,
   onChange,
   selectedKit,
 }: {
   currentKitPath: string;
-  isSelecting: boolean;
   kits: MyKitEntry[];
-  onAddExisting: () => void;
   onChange: (path: string) => void;
   selectedKit?: MyKitEntry;
 }) {
@@ -6743,30 +6655,16 @@ function UseKitSelector({
       <LabelWithHelp
         htmlFor="runtime-kit"
         label="Select Agent Kit"
-        help="Choose a kit from My Kits. Add an existing folder only if the kit is not in your library."
+        help="Choose a kit from My Kits. Import or build a kit first if it is not listed."
       />
-      <div className="path-picker">
-        <select id="runtime-kit" onChange={(event) => onChange(event.target.value)} value={currentKitPath}>
-          <option value="">Choose from My Kits</option>
-          {kits.map((kit) => (
-            <option key={kit.path} value={kit.path}>
-              {kit.name} ({kit.version})
-            </option>
-          ))}
-          {currentKitPath && !kits.some((kit) => pathsEqualLoose(kit.path, currentKitPath)) && (
-            <option value={currentKitPath}>{friendlyLocation(currentKitPath)}</option>
-          )}
-        </select>
-        <button
-          className="secondary-button compact-button"
-          disabled={isSelecting}
-          onClick={onAddExisting}
-          type="button"
-        >
-          <FolderOpen size={18} />
-          {isSelecting ? "Selecting" : "Add existing kit..."}
-        </button>
-      </div>
+      <select id="runtime-kit" onChange={(event) => onChange(event.target.value)} value={currentKitPath}>
+        <option value="">Choose from My Kits</option>
+        {kits.map((kit) => (
+          <option key={kit.path} value={kit.path}>
+            {kit.name} ({kit.version})
+          </option>
+        ))}
+      </select>
       {selectedKit && (
         <article className="selected-kit-card">
           <div>
@@ -6776,12 +6674,6 @@ function UseKitSelector({
           <p>{selectedKit.description || "No description available."}</p>
           <small>{friendlyLocation(selectedKit.path)}</small>
         </article>
-      )}
-      {currentKitPath && (
-        <details className="advanced-details compact-advanced">
-          <summary>Show full path</summary>
-          <div>{currentKitPath}</div>
-        </details>
       )}
     </div>
   );
@@ -6799,30 +6691,23 @@ function UsePromptModeSelector({
   promptCount: number;
 }) {
   return (
-    <div className="prompt-mode-grid" role="radiogroup" aria-label="Prompt mode">
-      <button
-        aria-checked={mode === "prepared"}
-        className={`prompt-mode-card ${mode === "prepared" ? "active" : ""}`}
-        disabled={disabledPrepared}
-        onClick={() => onChange("prepared")}
-        role="radio"
-        type="button"
-      >
-        <strong>Use a Prepared Prompt</strong>
-        <span>Choose a reusable workflow from the kit, fill inputs, preview, and run.</span>
-        <small>{promptCount} available</small>
-      </button>
-      <button
-        aria-checked={mode === "custom"}
-        className={`prompt-mode-card ${mode === "custom" ? "active" : ""}`}
-        onClick={() => onChange("custom")}
-        role="radio"
-        type="button"
-      >
-        <strong>Write my own prompt</strong>
-        <span>Use the kit instructions with a custom task you write yourself.</span>
-        <small>Freeform</small>
-      </button>
+    <div className="prompt-mode-control">
+      <LabelWithHelp
+        htmlFor="prompt-mode"
+        label="Prompt type"
+        help="Use a prepared prompt when the kit provides one, or write your own prompt anytime."
+      />
+      <select id="prompt-mode" onChange={(event) => onChange(event.target.value as UsePromptMode)} value={mode}>
+        {!disabledPrepared && (
+          <option value="prepared">Prepared Prompt</option>
+        )}
+        <option value="custom">Custom Prompt</option>
+      </select>
+      {!disabledPrepared && (
+        <p className="form-copy compact-state">
+          {promptCount} prepared prompt{promptCount === 1 ? "" : "s"} available.
+        </p>
+      )}
     </div>
   );
 }
@@ -6917,6 +6802,8 @@ function PreparedPromptSelector({
     return null;
   }
 
+  const selectedPrompt = prompts.find((prompt) => prompt.id === selectedPromptId) ?? prompts[0];
+
   return (
     <div className="prepared-prompt-panel">
       <LabelWithHelp
@@ -6935,23 +6822,15 @@ function PreparedPromptSelector({
           </option>
         ))}
       </select>
-      <div className="prompt-card-grid">
-        {prompts.map((prompt) => (
-          <button
-            className={`prompt-choice-card ${prompt.id === selectedPromptId ? "active" : ""}`}
-            key={prompt.id}
-            onClick={() => onSelectPrompt(prompt.id)}
-            type="button"
-          >
-            <strong>{prompt.name}</strong>
-            <span>{prompt.description || "No description provided."}</span>
-            <small>
-              {prompt.inputs.length} input{prompt.inputs.length === 1 ? "" : "s"}
-              {prompt.documentLikeOutput ? " - document output" : ""}
-            </small>
-          </button>
-        ))}
-      </div>
+      {selectedPrompt && (
+        <div className="selected-prompt-summary">
+          <p>{selectedPrompt.description || "No description provided."}</p>
+          <small>
+            {selectedPrompt.inputs.length} input{selectedPrompt.inputs.length === 1 ? "" : "s"}
+            {selectedPrompt.documentLikeOutput ? " · document-like output" : ""}
+          </small>
+        </div>
+      )}
     </div>
   );
 }
@@ -7083,7 +6962,6 @@ function PromptPreview({
   isRendering,
   mode,
   preparedPrompt,
-  requiredInputs,
   renderedPrompt,
   userTask,
 }: {
@@ -7091,7 +6969,6 @@ function PromptPreview({
   isRendering?: boolean;
   mode: UsePromptMode;
   preparedPrompt?: PreparedPrompt;
-  requiredInputs: RequiredInputFields;
   renderedPrompt?: string;
   userTask: string;
 }) {
@@ -7099,7 +6976,7 @@ function PromptPreview({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const preview = mode === "prepared" && preparedPrompt
     ? renderedPrompt || ""
-    : buildPlannedPrompt(userTask, requiredInputs, additionalContext);
+    : buildPlannedPrompt(userTask, additionalContext);
   async function copyPreview() {
     try {
       await navigator.clipboard.writeText(preview);
@@ -7130,42 +7007,21 @@ function PromptPreview({
   );
 }
 
-function combineAdditionalContext(requiredInputs: RequiredInputFields, additionalContext: string) {
-  return [formatRequiredInputs(requiredInputs), additionalContext.trim()]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 function buildPlannedPrompt(
   userTask: string,
-  requiredInputs: RequiredInputFields,
   additionalContext: string,
 ) {
   return [
     userTask.trim() ? `Main task:\n${userTask.trim()}` : "",
-    formatRequiredInputs(requiredInputs),
     additionalContext.trim() ? `Additional context:\n${additionalContext.trim()}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
-function formatRequiredInputs(requiredInputs: RequiredInputFields) {
-  const rows = [
-    ["Audience", requiredInputs.audience],
-    ["Reporting period or timeframe", requiredInputs.timeframe],
-    ["Project, environment, or account", requiredInputs.environment],
-    ["Files or source material", requiredInputs.fileNotes],
-    ["Other inputs", requiredInputs.other],
-  ].filter(([, value]) => value.trim() !== "");
-
-  if (rows.length === 0) {
-    return "";
-  }
-
-  return `Additional required inputs:\n${rows
-    .map(([label, value]) => `- ${label}: ${value.trim()}`)
-    .join("\n")}`;
+function findUnresolvedPromptVariables(text: string) {
+  const matches = text.matchAll(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g);
+  return Array.from(new Set(Array.from(matches, (match) => match[1])));
 }
 
 function defaultValueForPromptInput(input: PreparedPromptInput): unknown {
@@ -8252,6 +8108,12 @@ function SettingsScreen({
   const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
   const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
   const [includeReferences, setIncludeReferences] = useState(settings.includeReferences);
+  const [defaultValidateBeforeRun, setDefaultValidateBeforeRun] = useState(
+    () => window.localStorage.getItem("agentkitforge.defaultValidateBeforeRun") !== "false",
+  );
+  const [defaultOutputFormat, setDefaultOutputFormat] = useState(
+    () => window.localStorage.getItem("agentkitforge.defaultOutputFormat") || "markdown",
+  );
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const [isSelectingOutputFolder, setIsSelectingOutputFolder] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
@@ -8403,6 +8265,8 @@ function SettingsScreen({
       onUpdate("defaultOutputFolder", updatedSettings.defaultOutputFolder);
       onUpdate("preferredValidationProfile", updatedSettings.preferredValidationProfile);
       setSettingsMessage("Preferences saved.");
+      window.localStorage.setItem("agentkitforge.defaultValidateBeforeRun", String(defaultValidateBeforeRun));
+      window.localStorage.setItem("agentkitforge.defaultOutputFormat", defaultOutputFormat);
     } catch (caughtError) {
       setSettingsError(errorToMessage(caughtError));
     } finally {
@@ -8444,8 +8308,14 @@ function SettingsScreen({
     }
   }
 
+  const exportsFolder = appExportsFolder({ ...settings, defaultOutputFolder });
+  const draftsFolder = siblingAppFolder(defaultOutputFolder, "Drafts");
+  const rememberedCodexFolder = window.localStorage.getItem("agentkitforge.codexSkillsDestination") || "";
+  const rememberedClaudeFolder = window.localStorage.getItem("agentkitforge.claudeCodeDestination") || "";
+
   return (
-    <div className="form-panel settings-panel">
+    <div className="settings-screen">
+      <section className="form-panel settings-panel">
       <h2>AI Providers</h2>
       {settings.aiProviders.length === 0 && (
         <div className="inline-warning">
@@ -8590,8 +8460,14 @@ function SettingsScreen({
           {settingsError}
         </div>
       )}
+      </section>
 
-      <label htmlFor="default-output-folder">Default output folder</label>
+      <section className="form-panel settings-panel">
+      <h2>Storage & Folders</h2>
+      <p className="form-copy">
+        AgentKitForge uses friendly folder labels in the app. Full paths are shown here for setup.
+      </p>
+      <LabelWithHelp htmlFor="default-output-folder" label="AgentKitForge Library" help="New kits and imports use this folder by default." />
       <div className="path-picker">
         <input
           id="default-output-folder"
@@ -8609,8 +8485,29 @@ function SettingsScreen({
           <FolderOpen size={18} />
         </button>
       </div>
+      <dl className="report-meta">
+        <div>
+          <dt>Exports folder</dt>
+          <dd>{exportsFolder || "Set the AgentKitForge Library first"}</dd>
+        </div>
+        <div>
+          <dt>Drafts folder</dt>
+          <dd>{draftsFolder || "Set the AgentKitForge Library first"}</dd>
+        </div>
+        <div>
+          <dt>Remembered Codex folder</dt>
+          <dd>{rememberedCodexFolder || "Choose this from Install on Local Agent"}</dd>
+        </div>
+        <div>
+          <dt>Remembered Claude Code folder</dt>
+          <dd>{rememberedClaudeFolder || "Choose this from Install on Local Agent"}</dd>
+        </div>
+      </dl>
+      </section>
 
-      <label htmlFor="preferred-validation-profile">Preferred validation profile</label>
+      <section className="form-panel settings-panel">
+      <h2>Default Behavior</h2>
+      <LabelWithHelp htmlFor="preferred-validation-profile" label="Preferred validation level" help="Used as the starting validation level across workflows." />
       <select
         id="preferred-validation-profile"
         onChange={(event) => setPreferredValidationProfile(event.target.value as ValidationProfile)}
@@ -8623,7 +8520,7 @@ function SettingsScreen({
         ))}
       </select>
 
-      <label htmlFor="preferred-context-mode">Preferred context mode</label>
+      <LabelWithHelp htmlFor="preferred-context-mode" label="Default context mode" help="Used as the starting context mode in Use inside Forge." />
       <select
         id="preferred-context-mode"
         onChange={(event) => setPreferredContextMode(event.target.value as AgentKitContextMode)}
@@ -8636,14 +8533,24 @@ function SettingsScreen({
         ))}
       </select>
 
-      <label htmlFor="app-theme">Theme</label>
+      <label className="checkbox-row" htmlFor="settings-validate-before-run">
+        <input
+          checked={defaultValidateBeforeRun}
+          id="settings-validate-before-run"
+          onChange={(event) => setDefaultValidateBeforeRun(event.target.checked)}
+          type="checkbox"
+        />
+        <span>Validate before running by default</span>
+      </label>
+
+      <LabelWithHelp htmlFor="settings-default-output-format" label="Default output format" help="Used for response download defaults where the app can apply it." />
       <select
-        id="app-theme"
-        onChange={(event) => setTheme(event.target.value as ThemeMode)}
-        value={theme}
+        id="settings-default-output-format"
+        onChange={(event) => setDefaultOutputFormat(event.target.value)}
+        value={defaultOutputFormat}
       >
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
+        <option value="markdown">Markdown</option>
+        <option value="text">Text</option>
       </select>
 
       <div className="checkbox-grid">
@@ -8684,6 +8591,19 @@ function SettingsScreen({
           <span>Include references</span>
         </label>
       </div>
+      </section>
+
+      <section className="form-panel settings-panel">
+      <h2>Appearance</h2>
+      <LabelWithHelp htmlFor="app-theme" label="Theme" help="Choose the app theme. System theme can be added later." />
+      <select
+        id="app-theme"
+        onChange={(event) => setTheme(event.target.value as ThemeMode)}
+        value={theme}
+      >
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
 
       <button
         className="primary-button settings-inline-button"
@@ -8694,6 +8614,33 @@ function SettingsScreen({
         {isSavingPreferences && <InlineSpinner className="button-spinner" />}
         {isSavingPreferences ? "Saving" : "Save preferences"}
       </button>
+      </section>
+
+      <section className="form-panel settings-panel">
+      <h2>Security & Privacy</h2>
+      <p className="form-copy">
+        AgentKitForge stores provider settings and My Kits locally on this machine. It does not require an account or sync your local library.
+      </p>
+      <div className="inline-warning">
+        API keys are stored in local app data for v0.1, not an OS keychain. Remove a provider above to clear its saved key.
+      </div>
+      <button className="secondary-button settings-inline-button" disabled={isClearingKey} onClick={clearApiKey} type="button">
+        {isClearingKey && <InlineSpinner className="button-spinner" />}
+        Clear legacy OpenAI key
+      </button>
+      </section>
+
+      <section className="form-panel settings-panel">
+      <h2>About</h2>
+      <p className="form-copy">
+        AgentKitForge {appVersion} is a desktop workspace for building, packaging, installing, and using portable Agent Kits.
+      </p>
+      <div className="about-links">
+        <button onClick={() => openDocsLink("https://agentkitforge.com/")} type="button">AgentKitForge.com</button>
+        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Docs</button>
+        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+      </div>
+      </section>
     </div>
   );
 }

@@ -296,10 +296,10 @@ Open the Use section and use **Prepare for Web Assistant** to create a one-file 
 This is different from:
 
 - **Use inside Forge**: AgentKitForge runs the kit with your selected AI provider.
-- **Install Targets**: exports the kit into supported tools like Codex or Claude Code.
+- **Install on Local Agent**: exports the kit into supported tools like Codex or Claude Code.
 - **Package / Export**: creates shareable package artifacts.
 
-1. Select a local Agent Kit folder.
+1. Choose an Agent Kit from **My Kits**.
 2. Select a Markdown output file, or select an output folder to use the default `<kit-id>-<version>.onefile.md` file name.
 3. Click **Export one-file Markdown**.
 4. Upload the generated `.md` file to the assistant.
@@ -340,22 +340,25 @@ The default model comes from the selected/default provider. You can choose a kno
 To run a kit inside Forge:
 
 1. Open the Use section.
-2. Choose a kit from **My Kits**. Use **Add existing kit...** only when the kit is not in your local library yet.
-3. Choose either **Use a Prepared Prompt** or **Write my own prompt**.
-4. For a prepared prompt, choose the prompt card, fill required inputs, and review the rendered prompt preview.
+2. Choose a kit from **My Kits**. Use Import or Build first if the kit is not in your local library yet.
+3. Choose the prompt type from the dropdown: **Prepared Prompt** or **Custom Prompt**.
+4. For a prepared prompt, choose the prepared prompt from the dropdown, fill required inputs, and review the rendered prompt preview.
 5. For a custom prompt, write what you want the selected Agent Kit to help with.
-6. Open **Advanced Settings** only when you need additional context, context mode, references, max skills, prompt inclusion, or output token options.
-7. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
-8. Click **Run with AI**.
-9. Review the response before relying on it.
+6. Open **Additional Context** only when you want to add extra notes, constraints, or background for this run.
+7. Open **Advanced Settings** only when you need context mode, references, max skills, prompt inclusion, or output token options.
+8. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
+9. Click **Run with AI**.
+10. Review the response before relying on it.
 
-If the selected kit has prepared prompts, Use mode defaults to **Use a Prepared Prompt**. If the kit has no prepared prompts, Use mode defaults to **Write my own prompt** and shows a friendly fallback message.
+If the selected kit has prepared prompts, Use mode defaults to **Prepared Prompt**. If the kit has no prepared prompts, Use mode defaults to **Custom Prompt** and does not show the Prepared Prompt option.
 
-Prepared Prompts live in the kit's `prompts/` folder. AgentKitForge lists them in friendly cards with prompt name, description, input count, and document-output status. It renders input fields, validates required values, and sends the rendered prompt as the main task. Supported input types are short text, long text, choice, multi-choice, date, number, and boolean.
+Prepared Prompts live in the kit's `prompts/` folder. AgentKitForge lists them in a dropdown, shows the selected prompt description, input count, and document-output status, then renders input fields for that prompt. It validates required values and sends the rendered prompt as the main task. Supported input types are short text, long text, choice, multi-choice, date, number, and boolean.
 
-Custom Prompt mode does not require prepared prompts. The textarea is labeled **What do you want this kit to help with?** and is combined with the selected kit context from the core Context Builder.
+Custom Prompt is always available. It does not require prepared prompts.
 
-Prompt preview shows the final rendered prepared prompt or planned custom prompt without exposing raw prompt JSON by default. You can expand and copy the preview before running. Additional context, raw details, included files, included skills, and context warnings are kept under Advanced sections.
+The app blocks prepared prompt runs when unresolved variables remain after rendering. For example, if `{{company_name}}` and `{{reporting_period}}` are still present, the app shows a friendly unresolved-input message and does not send the unrendered template to the provider.
+
+Prompt preview shows the final rendered prepared prompt or planned custom prompt without exposing raw prompt JSON by default. You can expand and copy the preview before running. Additional context is collapsed by default in its own section; raw details, included files, included skills, and context warnings are kept under Advanced sections.
 
 All responses support **Copy response**, **Download as Markdown**, **Download as Text**, and **Clear**. If a selected prepared prompt marks its output as document-like, **Download as Markdown** is emphasized after the response. Download names use the prompt's `suggestedFileName` when available; otherwise AgentKitForge falls back to a sensible kit-based timestamped name.
 
@@ -395,21 +398,20 @@ The response metadata panel shows the kit name when available, model used, conte
 ## App Sections
 
 - My Kits
-- Import
 - Build
 - Use
+- Import
 - Package / Export
-- Install Targets
+- Install on Local Agent
 - Settings
-- About
 
-Validation is contextual rather than a primary workflow. You can validate from My Kits, Build result panels, Import results, before Use with **Validate before running**, before Package / Export, and before Install Targets. When validation finds issues, the app shows **Needs attention** with issues grouped by severity; full paths and technical details stay under Advanced sections.
+Validation is contextual rather than a primary workflow. You can validate from My Kits, Build result panels, Import results, before Use with **Validate before running**, before Package / Export, and before Install on Local Agent. When validation finds issues, the app shows **Needs attention** with issues grouped by severity; full paths and technical details stay under Advanced sections.
 
 When a contextual action opens the secondary **Validate Kit** tool, it is for checking the selected kit directly. It is not shown as a primary sidebar workflow.
 
-## Install Targets
+## Install on Local Agent
 
-Use **Install Targets** to export an Agent Kit into tool-specific local formats.
+Use **Install on Local Agent** to export an Agent Kit into tool-specific local formats for local agent tools like Codex or Claude Code.
 
 The first supported target is Codex skills:
 
@@ -437,14 +439,12 @@ AgentKitForge writes files only. It does not launch Claude Code, restart Claude 
 
 Settings controls local app defaults and AI provider access:
 
-- AI providers: add OpenAI, Anthropic, Gemini, Ollama, or custom OpenAI-compatible providers.
-- API keys: save, update, clear by editing a provider, and test the selected provider.
-- Default provider and model: used by Build with AI and Use inside Forge unless changed on the screen.
-- Default output folder: pre-fills build, render, export, and package destinations where applicable.
-- Preferred validation profile: pre-fills validation-related workflows.
-- Preferred context mode: `all` or `triggered` for Use inside Forge.
-- Theme: light by default, with dark mode available when selected.
-- Context include defaults: policies, templates, workflows, and references.
+- **AI Providers**: add OpenAI, Anthropic, Gemini, Ollama, or custom OpenAI-compatible providers; save/update keys; choose defaults; and test connections.
+- **Storage & Folders**: AgentKitForge Library, derived Exports and Drafts folders, and remembered Codex / Claude Code destinations.
+- **Default Behavior**: preferred validation profile, default context mode, validate-before-run default, default output format, and context include defaults.
+- **Appearance**: light or dark theme.
+- **Security & Privacy**: local-only storage note and API key storage caveat.
+- **About**: app version, website, Docs, and Agent Kit Spec links.
 
 Use **Test selected provider** after saving provider settings. It sends a very small request with the selected/default model and reports success or a readable failure. Keys are not printed by the app.
 
