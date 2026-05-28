@@ -2227,9 +2227,13 @@ fn inspect_agent_kit_candidate_inner<R: Runtime>(
 
 fn clean_git_repository_url(url: &str) -> Result<String, String> {
     let repository_url = clean_required_value("Git repository URL", url)?;
-    if !repository_url.starts_with("https://") {
+    let allowed = repository_url.starts_with("https://")
+        || repository_url.starts_with("http://")
+        || repository_url.starts_with("ssh://")
+        || repository_url.starts_with("git@");
+    if !allowed {
         return Err(
-            "Use a public HTTPS Git repository URL for v0.1. Private repository authentication is not supported yet."
+            "Use an HTTPS or SSH Git repository URL that your local Git installation can clone."
                 .to_string(),
         );
     }
@@ -2257,7 +2261,7 @@ fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) 
 
     let output = command
         .output()
-        .map_err(|error| format!("Unable to start Git. Make sure Git is installed and available on PATH. Details: {error}"))?;
+        .map_err(|error| format!("AgentKitForge could not start Git. Make sure Git is installed and available on PATH.\n\nTechnical details:\n{error}"))?;
 
     if output.status.success() {
         return Ok(());
@@ -2265,13 +2269,13 @@ fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) 
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let detail = if stderr.is_empty() {
-        "Git clone failed. Check that the repository is public, the URL is correct, and the branch or ref exists."
+        "Git clone failed without additional output."
             .to_string()
     } else {
         stderr
     };
 
-    Err(format!("Unable to import from Git repository. {detail}"))
+    Err(format!("AgentKitForge could not clone this repository.\n\nTechnical details:\n{detail}"))
 }
 
 fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<Vec<String>, String> {

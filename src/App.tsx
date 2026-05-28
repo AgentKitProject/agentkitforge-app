@@ -36,6 +36,7 @@ type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
 type ThemeMode = "light" | "dark";
 type BuildTabId = "ai" | "guided" | "template" | "draft" | "edit-ai" | "guided-edit";
+type BuildModeGroup = "Create New" | "Edit Existing";
 type ImportTabId = "zip" | "folder" | "git" | "market" | "org";
 type UsePromptMode = "prepared" | "custom";
 
@@ -464,7 +465,7 @@ const contextTargets: AgentKitContextTarget[] = ["openai", "chatgpt", "claude", 
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
 const buildModes: {
   id: BuildTabId;
-  group: "Create New" | "Edit Existing";
+  group: BuildModeGroup;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
   title: string;
   description: string;
@@ -592,6 +593,10 @@ const navItems: NavItem[] = [
 const secondarySectionTitles: Partial<Record<ExtendedSectionId, string>> = {
   validate: "Validate Kit",
 };
+
+function buildModeGroupForTab(tabId: BuildTabId): BuildModeGroup {
+  return buildModes.find((mode) => mode.id === tabId)?.group ?? "Create New";
+}
 
 export function App() {
   const [activeSection, setActiveSection] = useState<ExtendedSectionId>("my-kits");
@@ -1207,6 +1212,7 @@ function ImportScreen({
   });
   const [gitResult, setGitResult] = useState<ImportAgentKitFromGitResult | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
+  const [gitTechnicalError, setGitTechnicalError] = useState<string | null>(null);
   const [isImportingGit, setIsImportingGit] = useState(false);
   const [isSelectingGitDestination, setIsSelectingGitDestination] = useState(false);
 
@@ -1343,11 +1349,13 @@ function ImportScreen({
     setGitForm((current) => ({ ...current, [key]: value }));
     setGitResult(null);
     setGitError(null);
+    setGitTechnicalError(null);
   }
 
   async function selectGitDestinationFolder() {
     setIsSelectingGitDestination(true);
     setGitError(null);
+    setGitTechnicalError(null);
     try {
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
@@ -1363,10 +1371,11 @@ function ImportScreen({
   async function importGitRepository() {
     setIsImportingGit(true);
     setGitError(null);
+    setGitTechnicalError(null);
     setGitResult(null);
     try {
       if (!gitForm.repositoryUrl.trim()) {
-        throw new Error("Enter a public Git repository URL.");
+        throw new Error("Enter a Git repository URL.");
       }
       if (!gitForm.destinationRootFolder.trim()) {
         throw new Error("Choose an import destination.");
@@ -1387,7 +1396,13 @@ function ImportScreen({
         onKitImported(importResult.importedPath);
       }
     } catch (caughtError) {
-      setGitError(errorToMessage(caughtError));
+      const message = errorToMessage(caughtError);
+      if (message.toLowerCase().includes("could not clone") || message.toLowerCase().includes("could not start git")) {
+        setGitError("AgentKitForge could not clone this repository.");
+        setGitTechnicalError(message);
+      } else {
+        setGitError(message);
+      }
     } finally {
       setIsImportingGit(false);
     }
@@ -1473,6 +1488,7 @@ function ImportScreen({
             onUpdateForm={updateGitForm}
             onUseKit={onUseKit}
             result={gitResult}
+            technicalError={gitTechnicalError}
           />
         )}
         {activeTab === "market" && <ComingSoonImportPanel title="Agent Kit Market" />}
@@ -1790,6 +1806,7 @@ function ImportGitPanel({
   onUpdateForm,
   onUseKit,
   result,
+  technicalError,
 }: {
   error: string | null;
   form: {
@@ -1810,6 +1827,7 @@ function ImportGitPanel({
   ) => void;
   onUseKit: (path: string) => void;
   result: ImportAgentKitFromGitResult | null;
+  technicalError: string | null;
 }) {
   const importedPath = result?.importedPath || "";
   const isValid = Boolean(result?.validationReport?.valid);
@@ -1818,16 +1836,25 @@ function ImportGitPanel({
     <div className="form-panel import-panel">
       <h2>Import from Git Repository</h2>
       <p className="form-copy">
-        Import a public repository whose root folder is an Agent Kit. Private repository authentication is not supported in v0.1.
+        Import a repository whose root folder is an Agent Kit. AgentKitForge uses your local Git configuration for private repositories.
       </p>
 
-      <LabelWithHelp htmlFor="git-repository-url" label="Git repository URL" help="Use a public HTTPS Git URL from GitHub, GitLab, Bitbucket, or another Git host." />
+      <LabelWithHelp htmlFor="git-repository-url" label="Git repository URL" help="Use an HTTPS or SSH URL from GitHub, GitLab, Bitbucket, or another Git host." />
       <input
         id="git-repository-url"
         onChange={(event) => onUpdateForm("repositoryUrl", event.target.value)}
-        placeholder="https://github.com/example/agent-kit.git"
+        placeholder="https://github.com/example/agent-kit.git or git@github.com:org/repo.git"
         value={form.repositoryUrl}
       />
+
+      <LabelWithHelp htmlFor="git-auth-method" label="Authentication method" help="AgentKitForge lets local Git handle SSH keys and credential managers." />
+      <select id="git-auth-method" value="local-git" disabled>
+        <option value="local-git">Use my local Git credentials</option>
+      </select>
+      <p className="form-copy">
+        AgentKitForge uses your local Git configuration for private repositories. If you can clone this repo from your terminal,
+        AgentKitForge should usually be able to import it.
+      </p>
 
       <LabelWithHelp htmlFor="git-reference" label="Branch or ref" help="Optional. Leave blank to import the repository default branch." />
       <input
@@ -1875,7 +1902,27 @@ function ImportGitPanel({
       </button>
       {isImporting && <LoadingStatus text="Cloning repository, inspecting files, and validating kit..." />}
 
-      {error && <div className="error-state" role="alert">{error}</div>}
+      {error && (
+        <div className="error-state" role="alert">
+          <strong>{error}</strong>
+          {technicalError && (
+            <>
+              <p>Try these checks:</p>
+              <ul>
+                <li>Confirm Git is installed.</li>
+                <li>Confirm you can clone this repo from your terminal.</li>
+                <li>Check your SSH key or Git credential manager.</li>
+                <li>Use an HTTPS or SSH URL you have access to.</li>
+                <li>Check the branch or ref.</li>
+              </ul>
+              <details className="advanced-details compact-advanced">
+                <summary>Show technical Git error</summary>
+                <pre className="json-panel">{technicalError}</pre>
+              </details>
+            </>
+          )}
+        </div>
+      )}
 
       {result && !result.inspection.looksLikeAgentKit && (
         <CandidateInspectionPanel inspection={result.inspection} title="This repository does not look like an Agent Kit." />
@@ -2124,6 +2171,10 @@ function BuildScreen({
     const saved = window.localStorage.getItem("agentkitforge.lastBuildTab") as BuildTabId | null;
     return saved && buildModes.some((tab) => tab.id === saved) ? saved : "ai";
   });
+  const [activeBuildGroup, setActiveBuildGroup] = useState<BuildModeGroup>(() => {
+    const saved = window.localStorage.getItem("agentkitforge.lastBuildTab") as BuildTabId | null;
+    return saved && buildModes.some((tab) => tab.id === saved) ? buildModeGroupForTab(saved) : "Create New";
+  });
   const [guidedStep, setGuidedStep] = useState<GuidedBuilderStep>("basics");
   const [guidedForm, setGuidedForm] = useState<GuidedBuilderState>(() =>
     createDefaultGuidedBuilderState(settings.defaultOutputFolder),
@@ -2136,7 +2187,15 @@ function BuildScreen({
 
   function selectBuildTab(tabId: BuildTabId) {
     setActiveBuildTab(tabId);
+    setActiveBuildGroup(buildModeGroupForTab(tabId));
     window.localStorage.setItem("agentkitforge.lastBuildTab", tabId);
+  }
+
+  function selectBuildGroup(group: BuildModeGroup) {
+    setActiveBuildGroup(group);
+    if (buildModeGroupForTab(activeBuildTab) !== group) {
+      selectBuildTab(group === "Create New" ? "ai" : "edit-ai");
+    }
   }
 
   useEffect(() => {
@@ -2924,7 +2983,6 @@ function BuildScreen({
         },
       });
       setGeneratedRenderResult(result);
-      onKitReady(result.rootPath);
     } catch (caughtError) {
       setGeneratedRenderError(errorToMessage(caughtError));
     } finally {
@@ -2978,7 +3036,12 @@ function BuildScreen({
 
   return (
     <div className="build-screen">
-      <BuildModePicker activeMode={activeBuildTab} onSelect={selectBuildTab} />
+      <BuildModePicker
+        activeGroup={activeBuildGroup}
+        activeMode={activeBuildTab}
+        onSelect={selectBuildTab}
+        onSelectGroup={selectBuildGroup}
+      />
 
       {activeBuildTab === "ai" && (
       <div className="build-layout">
@@ -3172,6 +3235,8 @@ function BuildScreen({
             isRenderingDraft={isRenderingGeneratedDraft}
             onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
             onAddToMyKits={addRenderedKitToMyKits}
+            onPackageKit={onPackageKit}
+            onUseKit={onUseKit}
             saveLabel="Save"
           />
         </div>
@@ -3275,6 +3340,8 @@ function BuildScreen({
               isRenderingDraft={isRenderingGeneratedDraft}
               onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
               onAddToMyKits={addRenderedKitToMyKits}
+              onPackageKit={onPackageKit}
+              onUseKit={onUseKit}
               onSaveUpdate={saveEditUpdate}
               saveLabel="Save as new kit"
               updateLabel="Save update"
@@ -3576,43 +3643,60 @@ function BuildScreen({
 }
 
 function BuildModePicker({
+  activeGroup,
   activeMode,
   onSelect,
+  onSelectGroup,
 }: {
+  activeGroup: BuildModeGroup;
   activeMode: BuildTabId;
   onSelect: (mode: BuildTabId) => void;
+  onSelectGroup: (group: BuildModeGroup) => void;
 }) {
+  const visibleModes = buildModes.filter((mode) => mode.group === activeGroup);
+
   return (
     <div className="build-mode-groups">
-      {(["Create New", "Edit Existing"] as const).map((group) => (
-        <section className="build-mode-group" key={group}>
-          <div className="panel-label">{group}</div>
-          <div className="build-mode-grid">
-            {buildModes.filter((mode) => mode.group === group).map((mode) => {
-              const Icon = mode.icon;
-              return (
-                <button
-                  aria-selected={activeMode === mode.id}
-                  className={`build-mode-card ${activeMode === mode.id ? "active" : ""}`}
-                  key={mode.id}
-                  onClick={() => onSelect(mode.id)}
-                  type="button"
-                >
-                  <Icon size={22} />
-                  <span>
-                    <strong>
-                      {mode.title}
-                      <HelpTip focusable={false} text={mode.description} />
-                    </strong>
-                    <small>{mode.description}</small>
-                    <em>{mode.bestFor}</em>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      ))}
+      <div className="segmented-control" role="tablist" aria-label="Build workspace">
+        {(["Create New", "Edit Existing"] as const).map((group) => (
+          <button
+            aria-selected={activeGroup === group}
+            className={`segment-button ${activeGroup === group ? "active" : ""}`}
+            key={group}
+            onClick={() => onSelectGroup(group)}
+            role="tab"
+            type="button"
+          >
+            {group}
+          </button>
+        ))}
+      </div>
+      <section className="build-mode-group">
+        <div className="build-mode-grid">
+          {visibleModes.map((mode) => {
+            const Icon = mode.icon;
+            return (
+              <button
+                aria-selected={activeMode === mode.id}
+                className={`build-mode-card ${activeMode === mode.id ? "active" : ""}`}
+                key={mode.id}
+                onClick={() => onSelect(mode.id)}
+                type="button"
+              >
+                <Icon size={22} />
+                <span>
+                  <strong>
+                    {mode.title}
+                    <HelpTip focusable={false} text={mode.description} />
+                  </strong>
+                  <small>{mode.description}</small>
+                  <em>{mode.bestFor}</em>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }
@@ -8866,9 +8950,11 @@ function GeneratedDraftResults({
   onRequestChanges,
   onRestoreRevision,
   onAddToMyKits,
+  onPackageKit,
   onSaveJson,
   onSaveUpdate,
   onSelectRenderOutputFolder,
+  onUseKit,
   onValidateRenderedKit,
   renderError,
   renderForce,
@@ -8895,9 +8981,11 @@ function GeneratedDraftResults({
   onRequestChanges: () => void;
   onRestoreRevision: (revisionId: string) => void;
   onAddToMyKits: (rootPath: string) => void;
+  onPackageKit: (rootPath: string) => void;
   onSaveJson: () => void;
   onSaveUpdate?: () => void;
   onSelectRenderOutputFolder: () => void;
+  onUseKit: (rootPath: string) => void;
   onValidateRenderedKit: (rootPath: string) => void;
   renderError: string | null;
   renderForce: boolean;
@@ -9141,6 +9229,20 @@ function GeneratedDraftResults({
               type="button"
             >
               Add to My Kits
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => onUseKit(renderResult.rootPath)}
+              type="button"
+            >
+              Use Kit
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => onPackageKit(renderResult.rootPath)}
+              type="button"
+            >
+              Package / Export
             </button>
           </div>
         )}

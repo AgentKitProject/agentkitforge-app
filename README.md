@@ -115,21 +115,21 @@ Long-running actions show visible status text and disable their triggering butto
 
 ## Build Workspace
 
-The Build page is organized as a Create/Edit workspace.
+The Build page is organized as a Create/Edit workspace with a top-level switch. Choose **Create New** to make a new Agent Kit, or **Edit Existing** to update a kit from My Kits. Only the selected group is shown, so the page stays focused.
 
-Create New:
+Create New modes:
 
 - **Build with AI**: default mode for describing the kit you want and generating a reviewable AgentKitDraft.
 - **Guided Builder**: step-by-step no-code builder for creating a kit entirely inside AgentKitForge.
 - **From Template**: creates a kit from `blank` or `financial-review`.
 - **From Draft JSON - Advanced**: renders an existing AgentKitDraft JSON file into a kit folder.
 
-Edit Existing:
+Edit Existing modes:
 
 - **Edit with AI**: load a kit from My Kits as a draft, request changes, and save an update or save as a new kit.
 - **Guided Editor**: load a kit from My Kits into the form builder and edit without touching YAML or Markdown.
 
-AgentKitForge remembers the last Build/Edit mode you used in local browser storage. If no mode has been used yet, Build opens on **Build with AI**.
+AgentKitForge remembers the last Build/Edit mode you used in local browser storage. If no mode has been used yet, Build opens on **Create New -> Build with AI**.
 
 New kits default to the app-managed library folder, normally `Documents/AgentKitForge/Kits` on Windows. You can change the save location in Settings or per workflow.
 
@@ -247,7 +247,7 @@ The domain field is searchable. You can select a known domain such as Finance / 
 
 Build with AI is iterative. AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to the selected AI provider, parses the returned AgentKitDraft JSON, validates it against the core draft schema, and starts an AI Draft Session.
 
-Generated AI drafts are not usable Agent Kits yet and are not added to My Kits automatically. They remain draft sessions until you click **Save**, which renders the current draft into an Agent Kit folder. After saving, you can validate, add to My Kits, use the kit, or package/export it.
+Generated AI drafts are not usable Agent Kits yet and are not added to My Kits automatically. They remain draft sessions until you click **Save**, which renders the current draft into an Agent Kit folder. After saving, AgentKitForge offers actions to validate the kit, add it to My Kits, use it, or package/export it.
 
 The **Sections to include** control lets you choose which draft sections the AI should include. Basics, Skills, and Prepared Prompts are required and locked. Optional sections include Policies, Templates / Outputs, Examples, Workflows, References, Evals, and Scripts. Scripts are marked Advanced and should be selected only when the kit really needs code.
 
@@ -489,7 +489,7 @@ Import options:
 
 - **From .agentkit.zip**: implemented for portable Agent Kit packages.
 - **From Folder**: inspects an existing local Agent Kit folder, validates it, and adds valid kits to My Kits without copying it.
-- **From Git Repository**: clones a public HTTPS Git repository, checks that the repository root is an Agent Kit, copies it into the AgentKitForge Library, validates it, and adds valid kits to My Kits.
+- **From Git Repository**: clones an HTTPS or SSH Git repository using local Git, checks that the repository root is an Agent Kit, copies it into the AgentKitForge Library, validates it, and adds valid kits to My Kits.
 - **From Agent Kit Market**: placeholder for later.
 - **From Organization Repository**: placeholder for later.
 
@@ -508,7 +508,11 @@ The importer blocks zip path traversal and refuses to overwrite non-empty folder
 
 To import from a folder, choose the folder that contains `agentkit.yaml`, `AGENTKIT.md`, `START_HERE.md`, and `skills/<skill-id>/SKILL.md`. AgentKitForge uses `agentkitforge-core` candidate inspection to show friendly missing-file and missing-folder explanations instead of raw validation JSON.
 
-To import from Git, use a public HTTPS Git URL from GitHub, GitLab, Bitbucket, or another Git host. You can optionally enter a branch or ref. Private repository authentication is not supported in v0.1. AgentKitForge clones the repository to a temporary folder, inspects only the repository files, and does not execute repository scripts. The Agent Kit files must be at the repository root; otherwise the app explains what is missing and recommends importing the folder that contains the kit.
+To import from Git, use an HTTPS or SSH Git URL from GitHub, GitLab, Bitbucket, or another Git host. You can optionally enter a branch or ref. AgentKitForge uses your local Git installation for read-only clone access, including SSH keys, Git Credential Manager, existing HTTPS credentials, and local Git config. If you can clone the repository from your terminal, AgentKitForge should usually be able to import it.
+
+AgentKitForge does not add OAuth, store Git provider tokens, push commits, or write to the remote in v0.1. It clones the repository to a temporary folder, inspects only the repository files, and does not execute repository scripts. The Agent Kit files must be at the repository root; otherwise the app explains what is missing and recommends importing the folder that contains the kit.
+
+If Git import fails, check that Git is installed, confirm the same URL clones from your terminal, check your SSH key or Git credential manager, verify that the HTTPS or SSH URL is one you can access, and confirm the branch or ref exists. Raw Git errors are available under technical details.
 
 ## Default App Folders
 
