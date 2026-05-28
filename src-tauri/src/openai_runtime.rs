@@ -1,6 +1,7 @@
-use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
+
+use crate::ai_providers::{generate_text, selected_model, AiProviderConfig, GenerateTextRequest};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -8,6 +9,7 @@ pub struct RunAgentKitInput {
     pub kit_path: String,
     pub user_task: String,
     pub additional_context: Option<String>,
+    pub provider_id: Option<String>,
     pub model: Option<String>,
     pub max_output_length: Option<u32>,
     pub context_mode: Option<AgentKitContextMode>,
@@ -23,6 +25,8 @@ pub struct RunAgentKitInput {
 #[serde(rename_all = "camelCase")]
 pub struct RunAgentKitResult {
     pub response: String,
+    pub provider_id: String,
+    pub provider_name: String,
     pub model: String,
     pub kit_name: Option<String>,
     pub context: AgentKitContextDetails,
@@ -54,14 +58,6 @@ pub struct AgentKitContextDetails {
 }
 
 #[derive(Debug, Serialize)]
-struct ResponsesRequest {
-    model: String,
-    instructions: String,
-    input: String,
-    max_output_tokens: u32,
-}
-
-#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ContextBuilderRequest {
     kit_path: String,
@@ -85,28 +81,10 @@ struct ContextBuilderResult {
     warnings: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ResponsesResponse {
-    output: Option<Vec<ResponseOutput>>,
-    output_text: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseOutput {
-    content: Option<Vec<ResponseContent>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseContent {
-    #[serde(rename = "type")]
-    content_type: Option<String>,
-    text: Option<String>,
-}
-
 const DEFAULT_MODEL: &str = "gpt-5-mini";
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 1800;
 pub async fn run_agent_kit_with_openai(
-    api_key: String,
+    provider: AiProviderConfig,
     input: RunAgentKitInput,
     bridge_script: std::path::PathBuf,
     working_directory: std::path::PathBuf,
@@ -114,13 +92,7 @@ pub async fn run_agent_kit_with_openai(
 ) -> Result<RunAgentKitResult, String> {
     let kit_root = canonicalize_kit_path(&input.kit_path)?;
     let task = required("Task", &input.user_task)?;
-    let model = input
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_MODEL)
-        .to_string();
+    let model = selected_model(&provider, input.model.as_deref()).unwrap_or_else(|_| DEFAULT_MODEL.to_string());
     let max_output_tokens = input
         .max_output_length
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
@@ -130,36 +102,21 @@ pub async fn run_agent_kit_with_openai(
     let openai_input = compose_openai_input(&context.user_context, input.additional_context.as_deref());
     let approximate_context_length = context.system_context.len() + openai_input.len();
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(api_key)
-        .json(&ResponsesRequest {
-            model: model.clone(),
+    let response_text = generate_text(
+        &provider,
+        GenerateTextRequest {
             instructions: context.system_context,
             input: openai_input,
+            model: model.clone(),
             max_output_tokens,
-        })
-        .send()
-        .await
-        .map_err(|error| format!("Unable to reach OpenAI: {error}"))?;
-
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Unable to read OpenAI response: {error}"))?;
-
-    if !status.is_success() {
-        return Err(openai_error_message(status, &body));
-    }
-
-    let parsed: ResponsesResponse =
-        serde_json::from_str(&body).map_err(|error| format!("Unable to parse OpenAI response: {error}"))?;
-    let response_text = extract_response_text(parsed)?;
+        },
+    )
+    .await?;
 
     Ok(RunAgentKitResult {
         response: response_text,
+        provider_id: provider.id,
+        provider_name: provider.name,
         model,
         kit_name: read_kit_name(&kit_root),
         context: AgentKitContextDetails {
@@ -289,55 +246,4 @@ fn required(label: &str, value: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.to_string())
-}
-
-fn extract_response_text(response: ResponsesResponse) -> Result<String, String> {
-    if let Some(output_text) = response.output_text.map(|text| text.trim().to_string()) {
-        if !output_text.is_empty() {
-            return Ok(output_text);
-        }
-    }
-
-    let text = response
-        .output
-        .unwrap_or_default()
-        .into_iter()
-        .flat_map(|item| item.content.unwrap_or_default())
-        .filter_map(|content| {
-            let is_text = content
-                .content_type
-                .as_deref()
-                .is_none_or(|content_type| content_type == "output_text" || content_type == "text");
-            if is_text {
-                content.text
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-        .trim()
-        .to_string();
-
-    if text.is_empty() {
-        Err("OpenAI returned an empty response.".to_string())
-    } else {
-        Ok(text)
-    }
-}
-
-fn openai_error_message(status: StatusCode, body: &str) -> String {
-    let message = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(|message| message.as_str())
-                .map(str::to_string)
-        })
-        .filter(|message| !message.trim().is_empty())
-        .unwrap_or_else(|| "OpenAI request failed.".to_string());
-
-    format!("OpenAI request failed ({status}): {message}")
 }

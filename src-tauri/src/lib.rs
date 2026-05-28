@@ -11,6 +11,7 @@ use zip::ZipArchive;
 
 mod openai_runtime;
 mod settings;
+mod ai_providers;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -212,6 +213,13 @@ struct TestOpenAIConnectionResult {
     message: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TestAiProviderConnectionInput {
+    provider_id: Option<String>,
+    model: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentKitStarterHint {
@@ -231,6 +239,8 @@ struct SaveMarkdownFileResult {
     file_path: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct KitMetadata {
     id: String,
     name: String,
@@ -262,6 +272,7 @@ struct GenerateAgentKitDraftInput {
     desired_validation_level: ValidationProfile,
     constraints: Option<String>,
     source_notes: Option<String>,
+    provider_id: Option<String>,
     model: Option<String>,
 }
 
@@ -271,7 +282,10 @@ struct GenerateAgentKitDraftResult {
     draft_json: serde_json::Value,
     draft_json_pretty: String,
     warnings: Vec<String>,
+    provider_id: String,
+    provider_name: String,
     model: String,
+    raw_response: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -337,6 +351,17 @@ fn select_forge_response_output_path() -> Result<Option<String>, String> {
         .set_title("Save Forge Response")
         .add_filter("Markdown", &["md"])
         .set_file_name("forge-response.md")
+        .save_file();
+
+    Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_forge_response_text_output_path() -> Result<Option<String>, String> {
+    let file = rfd::FileDialog::new()
+        .set_title("Download Forge Response as Text")
+        .add_filter("Text", &["txt"])
+        .set_file_name("agent-kit-output.txt")
         .save_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
@@ -594,14 +619,8 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
     input: GenerateAgentKitDraftInput,
 ) -> Result<GenerateAgentKitDraftResult, String> {
     let user_request = clean_required_value("Describe the Agent Kit you want", &input.user_request)?;
-    let api_key = settings::get_openai_api_key(&app)?;
-    let model = input
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("gpt-5-mini")
-        .to_string();
+    let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
+    let model = ai_providers::selected_model(&provider, input.model.as_deref())?;
     let bridge_script = resolve_generate_draft_bridge(&app)?;
     let node_command = resolve_node_command()?;
 
@@ -616,25 +635,26 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
     });
 
     let request_json = serde_json::to_string(&request).map_err(|error| error.to_string())?;
+    let provider_json = serde_json::to_string(&provider).map_err(|error| error.to_string())?;
     let working_directory = resolve_command_working_directory(&app);
     let output = tauri::async_runtime::spawn_blocking(move || {
         Command::new(node_command)
             .arg(&bridge_script)
-            .env("AGENTKITFORGE_OPENAI_API_KEY", api_key)
+            .env("AGENTKITFORGE_AI_PROVIDER_CONFIG", provider_json)
             .arg(request_json)
             .current_dir(working_directory)
             .output()
     })
     .await
-    .map_err(|error| format!("OpenAI draft generation task failed: {error}"))?
-    .map_err(|error| format!("Unable to run OpenAI draft generation: {error}"))?;
+    .map_err(|error| format!("AI draft generation task failed: {error}"))?
+    .map_err(|error| format!("Unable to run AI draft generation: {error}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(if detail.is_empty() {
-            "OpenAI draft generation failed without output".to_string()
+            "AI draft generation failed without output".to_string()
         } else {
             detail
         });
@@ -642,6 +662,14 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
 
     serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Unable to parse generated draft result: {error}"))
+}
+
+#[tauri::command]
+async fn generate_agent_kit_draft_with_ai<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: GenerateAgentKitDraftInput,
+) -> Result<GenerateAgentKitDraftResult, String> {
+    generate_agent_kit_draft_with_openai(app, input).await
 }
 
 #[tauri::command]
@@ -736,6 +764,12 @@ fn list_my_kits<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<MyKitEntry>,
         .kits
         .sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
     Ok(library.kits)
+}
+
+#[tauri::command]
+fn get_agent_kit_metadata(root_path: String) -> Result<KitMetadata, String> {
+    let path = canonicalize_directory(&root_path)?;
+    read_kit_metadata(&path)
 }
 
 #[tauri::command]
@@ -989,55 +1023,49 @@ fn save_app_preferences<R: Runtime>(
 }
 
 #[tauri::command]
+fn save_ai_provider<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ai_providers::AiProviderInput,
+) -> Result<settings::PublicSettings, String> {
+    settings::save_ai_provider(&app, input)
+}
+
+#[tauri::command]
+fn remove_ai_provider<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    provider_id: String,
+) -> Result<settings::PublicSettings, String> {
+    settings::remove_ai_provider(&app, provider_id)
+}
+
+#[tauri::command]
+fn set_default_ai_provider<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    provider_id: String,
+) -> Result<settings::PublicSettings, String> {
+    settings::set_default_ai_provider(&app, provider_id)
+}
+
+#[tauri::command]
+async fn test_ai_provider_connection<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: TestAiProviderConnectionInput,
+) -> Result<ai_providers::ProviderConnectionTestResult, String> {
+    let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
+    ai_providers::test_connection(&provider, input.model).await
+}
+
+#[tauri::command]
 async fn test_openai_connection<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: TestOpenAIConnectionInput,
 ) -> Result<TestOpenAIConnectionResult, String> {
-    let api_key = settings::get_openai_api_key(&app)?;
-    let public_settings = settings::get_public_settings(&app)?;
-    let model = input
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&public_settings.default_model)
-        .to_string();
-
-    let response = reqwest::Client::new()
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(api_key)
-        .json(&serde_json::json!({
-            "model": model,
-            "input": "Reply with OK.",
-            "max_output_tokens": 16
-        }))
-        .send()
-        .await
-        .map_err(|error| format!("Unable to reach OpenAI: {error}"))?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|error| format!("Unable to read OpenAI response: {error}"))?;
-
-    if !status.is_success() {
-        let message = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .and_then(|message| message.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "OpenAI request failed.".to_string());
-        return Err(format!("OpenAI connection test failed ({status}): {message}"));
-    }
-
+    let provider = settings::get_ai_provider(&app, None)?;
+    let result = ai_providers::test_connection(&provider, input.model).await?;
     Ok(TestOpenAIConnectionResult {
-        ok: true,
-        model,
-        message: "OpenAI connection succeeded.".to_string(),
+        ok: result.ok,
+        model: result.model,
+        message: result.message,
     })
 }
 
@@ -1046,18 +1074,26 @@ async fn run_agent_kit_with_openai<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: openai_runtime::RunAgentKitInput,
 ) -> Result<openai_runtime::RunAgentKitResult, String> {
-    let api_key = settings::get_openai_api_key(&app)?;
+    let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
     let bridge_script = resolve_context_builder_bridge(&app)?;
     let working_directory = resolve_command_working_directory(&app);
     let node_command = resolve_node_command()?;
     openai_runtime::run_agent_kit_with_openai(
-        api_key,
+        provider,
         input,
         bridge_script,
         working_directory,
         node_command,
     )
     .await
+}
+
+#[tauri::command]
+async fn run_agent_kit_with_ai<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: openai_runtime::RunAgentKitInput,
+) -> Result<openai_runtime::RunAgentKitResult, String> {
+    run_agent_kit_with_openai(app, input).await
 }
 
 fn canonicalize_directory(root_path: &str) -> Result<PathBuf, String> {
@@ -1395,13 +1431,21 @@ fn split_lines_or_commas(value: Option<&str>) -> Option<Vec<String>> {
 }
 
 fn default_markdown_file_name(root_path: &Path) -> String {
-    let stem = root_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("agent-kit");
-
-    format!("{stem}.md")
+    match read_kit_metadata(root_path) {
+        Ok(metadata) => format!(
+            "{}-{}.onefile.md",
+            sanitize_folder_name(&metadata.id),
+            sanitize_folder_name(&metadata.version)
+        ),
+        Err(_) => {
+            let stem = root_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("agent-kit");
+            format!("{stem}.onefile.md")
+        }
+    }
 }
 
 fn default_artifact_stem(root_path: &Path) -> String {
@@ -1777,6 +1821,7 @@ pub fn run() {
             select_agent_kit_folder,
             select_onefile_output_path,
             select_forge_response_output_path,
+            select_forge_response_text_output_path,
             select_json_file,
             select_json_output_path,
             select_agent_kit_package_file,
@@ -1787,6 +1832,7 @@ pub fn run() {
             render_agent_kit_draft,
             render_generated_agent_kit_draft,
             generate_agent_kit_draft_with_openai,
+            generate_agent_kit_draft_with_ai,
             save_agent_kit_draft_json,
             save_markdown_file,
             get_agent_kit_starter_hint,
@@ -1795,9 +1841,15 @@ pub fn run() {
             clear_openai_api_key,
             save_default_model,
             save_app_preferences,
+            save_ai_provider,
+            remove_ai_provider,
+            set_default_ai_provider,
+            test_ai_provider_connection,
             test_openai_connection,
             run_agent_kit_with_openai,
+            run_agent_kit_with_ai,
             open_folder,
+            get_agent_kit_metadata,
             add_kit_to_library,
             list_my_kits,
             remove_kit_from_library,

@@ -75,7 +75,7 @@ src-tauri/target/release/bundle/nsis/
 
 The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` installer. Code signing is not configured yet, so Windows may show unsigned-app warnings. macOS and Linux packages are future work unless built manually on those platforms.
 
-The current app icon is a placeholder at `src-tauri/icons/icon.ico`. Replace that file and update `src-tauri/tauri.conf.json` if a full icon set is added later.
+The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` into `src-tauri/icons/`. The Windows bundle points at `src-tauri/icons/icon.ico`.
 
 ## Branding
 
@@ -92,9 +92,9 @@ src/assets/brand/agentkitforge-icon.svg
 src/assets/brand/agentkitforge-logo.svg
 ```
 
-The UI uses the AgentKitForge light palette by default, with CSS variables for dark-mode support through the operating system preference. Paths, generated files, package names, JSON, and command-like content use a monospace stack.
+The UI uses the AgentKitForge light palette by default. Dark mode is available from Settings and is stored as a local app preference. Paths, generated files, package names, JSON, and command-like content use a monospace stack.
 
-The Windows bundle still points at `src-tauri/icons/icon.ico`. Replace that file with a final generated `.ico` when production icon exports are available; no code signing or release upload is configured yet.
+To regenerate app/taskbar icons after changing the SVG source, run `npx tauri icon src/assets/brand/agentkitforge-icon.svg`. No code signing or release upload is configured yet.
 
 ### Build Verification Checklist
 
@@ -107,9 +107,50 @@ The Windows bundle still points at `src-tauri/icons/icon.ico`. Replace that file
 - Import a `.agentkit.zip` package.
 - Export a kit to a Codex skills directory.
 
+## Build Workspace
+
+The Build page is organized into tabs:
+
+- **Build with AI**: default mode for describing the kit you want and generating a reviewable AgentKitDraft.
+- **Guided Builder**: step-by-step no-code builder for creating a kit entirely inside AgentKitForge.
+- **From Template**: creates a kit from `blank` or `financial-review`.
+- **From Draft JSON**: renders an existing AgentKitDraft JSON file into a kit folder.
+
+AgentKitForge remembers the last Build tab you used in local browser storage. If no tab has been used yet, Build opens on **Build with AI**.
+
+New kits default to the app-managed library folder, normally `Documents/AgentKitForge/Kits` on Windows. You can change the save location in Settings or per workflow.
+
+## Guided Builder
+
+Use **Guided Builder** when you want to create a kit manually without editing YAML, Markdown, or folders.
+
+The flow has seven steps:
+
+1. **Basics**: kit name, auto-generated kit ID, description, domain, target users, validation level, and save location.
+2. **Skills**: add repeatable skills with triggers, use guidance, procedure steps, required context, output expectations, and risk level.
+3. **Guardrails**: add domain presets or custom boundaries. Presets cover finance, legal, medical, DevOps/SRE, security, compliance, HR/recruiting, and general business.
+4. **Outputs/Templates**: define expected output sections, optional output template, whether the result is document-like, suggested download name, and summary style.
+5. **Required Inputs**: define what users should provide when running the kit.
+6. **Examples**: add example prompts, required input examples, and expected outputs.
+7. **Review & Create**: review the summary and create, validate, use, package, or open the kit.
+
+Guided Builder builds an AgentKitDraft internally and renders it through `agentkitforge-core`. The raw draft JSON is hidden by default and available under Advanced details after creation.
+
+Required inputs are stored in the generated kit at:
+
+```text
+templates/agentkitforge/required-inputs.json
+```
+
+This keeps the kit compatible with current core validation while giving the desktop app a future-friendly place to read structured input definitions. Each input can define a label, help text, required flag, input type, placeholder, choice values, and whether it should be included in the generated prompt.
+
+If the kit includes guardrails and examples, Guided Builder targets `trusted` validation where practical. Otherwise it targets the selected validation level, with `local-valid` as the minimum.
+
+Use **Build with AI** when you want an AI provider to draft the kit from a description. Use **Guided Builder** when you want direct control through forms.
+
 ## Create a Kit From a Template
 
-Open the Build section and fill in:
+Open the Build section, choose **From Template**, and fill in:
 
 - Target output folder
 - Kit id
@@ -128,7 +169,7 @@ After creation, use **Validate created kit** to switch to validation with the de
 
 ## Render From Draft JSON
 
-Open the Build section and use **Render from Draft JSON** when you already have an `AgentKitDraft` JSON file:
+Open the Build section and use **From Draft JSON** when you already have an `AgentKitDraft` JSON file:
 
 1. Select the draft `.json` file.
 2. Select the target output folder for the rendered Agent Kit.
@@ -138,9 +179,38 @@ Open the Build section and use **Render from Draft JSON** when you already have 
 
 Draft JSON is the handoff format for the AI-assisted builder flow. Later, AgentKitForge will generate these drafts from natural-language requests; for now, you can render draft JSON produced by `agentkitforge-core` or checked into local examples.
 
-## Build With OpenAI
+## AI Providers
 
-Open Settings and save an OpenAI API key before using **Build with OpenAI**.
+AgentKitForge supports configurable AI providers for v0.1:
+
+- OpenAI
+- Anthropic / Claude API
+- Google Gemini API
+- Ollama
+- Custom OpenAI-compatible providers
+
+The desktop app uses `agentkitforge-core` for shared provider types, known model suggestions, default model helpers, base URL normalization, and provider capability metadata. The desktop app still owns local provider settings, API key storage, connection tests, provider-specific network adapters, and runtime request execution.
+
+Open **Settings** to add, edit, remove, test, and choose the default provider. Known model dropdowns are suggestions only; every provider also accepts a custom model ID. This is important for local and self-hosted providers where model names are arbitrary.
+
+Example base URLs:
+
+- OpenAI: `https://api.openai.com/v1`
+- Anthropic: `https://api.anthropic.com/v1`
+- Gemini: `https://generativelanguage.googleapis.com/v1beta`
+- Ollama native: `http://localhost:11434`
+- Ollama OpenAI-compatible: `http://localhost:11434/v1`
+- LM Studio: `http://localhost:1234/v1`
+- LocalAI: `http://localhost:8080/v1`
+- OpenRouter: `https://openrouter.ai/api/v1`
+
+Use inside Forge generally works with all providers. Build with AI requires reliable JSON output because the provider must return valid AgentKitDraft JSON. If a provider is marked as not reliably supporting structured JSON, AgentKitForge shows a warning and validates the draft before rendering.
+
+Connection tests send a very small request and report common failures such as a missing API key, invalid base URL, local server not running, model not found, malformed response, or invalid credentials. API keys are not printed by the app.
+
+## Build With AI
+
+Open Settings and configure an AI provider before using **Build with AI**.
 
 In the Build section, describe the Agent Kit you want and optionally provide:
 
@@ -151,7 +221,9 @@ In the Build section, describe the Agent Kit you want and optionally provide:
 - Source notes
 - Model override
 
-AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to OpenAI, parses the returned AgentKitDraft JSON, and validates it against the core draft schema. Review the generated JSON before rendering it.
+The domain field is searchable. You can select a known domain such as Finance / Accounting, Customer Support, Security, or Software Engineering, or type any custom domain. Known domains are suggestions, not restrictions.
+
+AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to the selected AI provider, parses the returned AgentKitDraft JSON, and validates it against the core draft schema. Review the generated JSON before rendering it.
 
 After generation, you can:
 
@@ -167,7 +239,7 @@ Draft JSON is the review and handoff step between AI-assisted planning and local
 Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web assistant:
 
 1. Select a local Agent Kit folder.
-2. Select a Markdown output file, or select an output folder to use the default `<kit-folder-name>.md` file name.
+2. Select a Markdown output file, or select an output folder to use the default `<kit-id>-<version>.onefile.md` file name.
 3. Click **Export one-file Markdown**.
 4. Upload the generated `.md` file to the assistant.
 5. Upload any task files required by the kit.
@@ -175,6 +247,8 @@ Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web
 7. Review the output before relying on it.
 
 The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill and reference sections.
+
+Normal views show friendly file names and locations first. Full filesystem paths are available in Advanced details areas when you need to copy or inspect them.
 
 ## Package / Export Artifacts
 
@@ -189,32 +263,34 @@ The screen can run validation before creating the `.agentkit.zip`. If validation
 
 After an artifact is created, use **Open output folder** or **Copy path** to locate or share the generated file.
 
-## Use Inside Forge With OpenAI
+## Use Inside Forge With AI
 
-Open Settings and save an OpenAI API key before using the built-in runtime. The key is stored locally in the app settings file on this machine and is not committed by the repo. This is a temporary local-storage approach for early development, so do not share local app data or check generated settings files into source control.
+Open Settings and configure at least one AI provider before using the built-in runtime. API keys are stored locally in the app settings file on this machine and are not committed by the repo. This is a temporary local-storage approach for early development, so do not share local app data or check generated settings files into source control.
 
-The default model is `gpt-5-mini`, which is intended as a cost-efficient model for well-defined text tasks. You can change the default model in Settings or override it in the Use screen.
+The default model comes from the selected/default provider. You can choose a known model suggestion or enter a custom model ID in Settings, Build, or Use.
 
 To run a kit inside Forge:
 
 1. Open the Use section.
 2. Select a local Agent Kit folder.
 3. Enter the task you want the kit to perform.
-4. Optionally add extra context such as assumptions, notes, or output constraints.
-5. Confirm the model, context options, validation profile, and output token limit.
-6. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
-7. Click **Run with OpenAI**.
-8. Review the response before relying on it.
+4. Fill any additional required inputs that the kit needs, such as audience, reporting period, project/environment, or source-file notes. File uploads are not implemented yet, so describe required files in the provided field.
+5. Optionally add extra context such as assumptions, notes, or output constraints.
+6. Review the collapsed **Prompt preview** before sending.
+7. Open **Advanced Settings** only when you need context mode, references, max skills, or output token options.
+8. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
+9. Click **Run with AI**.
+10. Review the response before relying on it.
 
-If the kit has `START_HERE.md` or `README.md`, the Use screen shows a short local hint from that file. This does not call OpenAI.
+If the kit has `START_HERE.md` or `README.md`, the Use screen shows a bounded, collapsed local hint from that file. You can expand or copy it. This does not call an AI provider.
 
 With **Validate before running** enabled, AgentKitForge validates the selected kit with the chosen validation profile before making the OpenAI request. If validation fails, the run is blocked and the validation issues are shown. Turn the checkbox off only when you deliberately want to test or debug an invalid kit.
 
-After a response is generated, you can copy it, save it as a Markdown file, or clear it from the screen. Saved Markdown includes the response plus run metadata for review.
+After a response is generated, you can copy it, download it as Markdown, download it as plain text, or clear it from the screen. Saved Markdown includes the response plus run metadata for review.
 
 ### Context Builder Options
 
-Use inside Forge builds OpenAI context through `agentkitforge-core` Context Builder.
+Use inside Forge builds AI context through `agentkitforge-core` Context Builder.
 
 Context modes:
 
@@ -230,7 +306,7 @@ Include options:
 - Workflows: on by default.
 - References: off by default to avoid oversized context.
 
-After a run, expand **Context details** to see included files, included skills, warnings, and approximate context length.
+After a run, expand **Context details** to see included files, included skills, warnings, and approximate context length. Raw JSON, raw paths, base URLs, structured JSON flags, and other technical options are generally behind Advanced sections.
 
 The response metadata panel shows the kit name when available, model used, context mode, validation profile, included skills, included file count, warnings count, and timestamp. Context builder warnings are shown in Context details; warnings may indicate fallback behavior such as triggered mode including all skills when no trigger matched.
 
@@ -273,22 +349,24 @@ AgentKitForge writes files only. It does not launch Claude Code, restart Claude 
 
 ## Settings
 
-Settings controls local app defaults and OpenAI access:
+Settings controls local app defaults and AI provider access:
 
-- OpenAI API key: save, update, clear, and test the saved key.
-- Default OpenAI model: used by Build with OpenAI and Use inside Forge unless changed on the screen.
+- AI providers: add OpenAI, Anthropic, Gemini, Ollama, or custom OpenAI-compatible providers.
+- API keys: save, update, clear by editing a provider, and test the selected provider.
+- Default provider and model: used by Build with AI and Use inside Forge unless changed on the screen.
 - Default output folder: pre-fills build, render, export, and package destinations where applicable.
 - Preferred validation profile: pre-fills validation-related workflows.
 - Preferred context mode: `all` or `triggered` for Use inside Forge.
+- Theme: light by default, with dark mode available when selected.
 - Context include defaults: policies, templates, workflows, and references.
 
-Use **Test OpenAI connection** after saving an API key. It sends a very small request with the selected/default model and reports success or a readable failure. The key is not printed by the app.
+Use **Test selected provider** after saving provider settings. It sends a very small request with the selected/default model and reports success or a readable failure. Keys are not printed by the app.
 
-Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. For v0.1 the OpenAI API key is stored in that local settings file, not in an OS keychain. Do not share local app data or commit generated settings files.
+Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. For v0.1 provider API keys are stored in that local settings file, not in an OS keychain. Do not share local app data or commit generated settings files.
 
 ## About
 
-The About screen shows the AgentKitForge version, product description, placeholder links for AgentKitForge.com, AgentKitMarket.com, and the GitHub repo, plus local-only privacy and OpenAI API key storage notes.
+The About screen shows the AgentKitForge version, product description, placeholder links for AgentKitForge.com, AgentKitMarket.com, and the GitHub repo, plus local-only privacy and AI provider key storage notes.
 
 ## My Kits Library
 

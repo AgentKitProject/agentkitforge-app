@@ -2,20 +2,21 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const [, , inputJson] = process.argv;
-const apiKey = process.env.AGENTKITFORGE_OPENAI_API_KEY;
+const providerJson = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
 
 if (!inputJson) {
   console.error("Draft generation input is required.");
   process.exit(2);
 }
 
-if (!apiKey) {
-  console.error("OpenAI API key is required.");
+if (!providerJson) {
+  console.error("AI provider configuration is required.");
   process.exit(2);
 }
 
 try {
   const input = JSON.parse(inputJson);
+  const provider = JSON.parse(providerJson);
   const core = await loadCore();
   const draftRequest = core.createAgentKitDraftRequest({
     userRequest: input.userRequest,
@@ -26,8 +27,7 @@ try {
     sourceNotes: input.sourceNotes,
   });
   const model = input.model || "gpt-5-mini";
-  const response = await callOpenAI(apiKey, model, draftRequest);
-  const rawText = extractResponseText(response);
+  const rawText = await callProvider(provider, model, draftRequest);
   const draftJson = parseJsonObject(rawText);
   const parsed = core.agentKitDraftSchema.safeParse(draftJson);
 
@@ -47,7 +47,10 @@ try {
       draftJson: draft,
       draftJsonPretty: `${JSON.stringify(draft, null, 2)}\n`,
       warnings: draftRequest.warnings,
+      providerId: provider.id,
+      providerName: provider.name,
       model,
+      rawResponse: null,
     }),
   );
 } catch (error) {
@@ -55,8 +58,38 @@ try {
   process.exit(1);
 }
 
-async function callOpenAI(apiKey, model, draftRequest) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
+async function callProvider(provider, model, draftRequest) {
+  const instructions = draftRequest.systemInstructions;
+  const input = [
+    draftRequest.builderInstructions,
+    "",
+    draftRequest.userPrompt,
+    "",
+    "Return only valid AgentKitDraft JSON.",
+    "Expected JSON schema:",
+    JSON.stringify(draftRequest.expectedJsonSchema),
+  ].join("\n");
+
+  switch (provider.providerType) {
+    case "openai":
+      return callOpenAIResponses(provider, model, instructions, input, draftRequest);
+    case "anthropic":
+      return callAnthropic(provider, model, instructions, input);
+    case "gemini":
+      return callGemini(provider, model, instructions, input);
+    case "ollama":
+      return callOllama(provider, model, instructions, input);
+    case "openai-compatible":
+      return callOpenAICompatible(provider, model, instructions, input);
+    default:
+      throw new Error(`Unsupported AI provider type: ${provider.providerType}`);
+  }
+}
+
+async function callOpenAIResponses(provider, model, instructions, input, draftRequest) {
+  const apiKey = requiredApiKey(provider);
+  const baseUrl = normalizedBaseUrl(provider.baseUrl || "https://api.openai.com/v1");
+  const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -64,15 +97,8 @@ async function callOpenAI(apiKey, model, draftRequest) {
     },
     body: JSON.stringify({
       model,
-      instructions: draftRequest.systemInstructions,
-      input: [
-        draftRequest.builderInstructions,
-        "",
-        draftRequest.userPrompt,
-        "",
-        "Expected JSON schema:",
-        JSON.stringify(draftRequest.expectedJsonSchema),
-      ].join("\n"),
+      instructions,
+      input,
       text: {
         format: {
           type: "json_schema",
@@ -87,13 +113,117 @@ async function callOpenAI(apiKey, model, draftRequest) {
   const body = await response.text();
 
   if (!response.ok) {
-    throw new Error(openAIErrorMessage(response.status, body));
+    throw new Error(providerErrorMessage(provider.name, response.status, body));
   }
 
-  return JSON.parse(body);
+  return extractOpenAIResponseText(JSON.parse(body), provider.name);
 }
 
-function extractResponseText(response) {
+async function callOpenAICompatible(provider, model, instructions, input) {
+  const baseUrl = normalizedBaseUrl(requiredBaseUrl(provider));
+  const headers = { "Content-Type": "application/json" };
+  if (provider.apiKey) {
+    headers.Authorization = `Bearer ${provider.apiKey}`;
+  }
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: instructions },
+        { role: "user", content: input },
+      ],
+      temperature: 0.2,
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(providerErrorMessage(provider.name, response.status, body));
+  }
+  const parsed = JSON.parse(body);
+  const text = parsed?.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error(`${provider.name} returned an empty draft response.`);
+  return text;
+}
+
+async function callAnthropic(provider, model, instructions, input) {
+  const apiKey = requiredApiKey(provider);
+  const baseUrl = normalizedBaseUrl(provider.baseUrl || "https://api.anthropic.com/v1");
+  const response = await fetch(`${baseUrl}/messages`, {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      system: instructions,
+      messages: [{ role: "user", content: input }],
+      max_tokens: 4000,
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(providerErrorMessage(provider.name, response.status, body));
+  }
+  const parsed = JSON.parse(body);
+  const text = (parsed.content ?? []).map((item) => item.text).filter(Boolean).join("\n").trim();
+  if (!text) throw new Error("Anthropic returned an empty draft response.");
+  return text;
+}
+
+async function callGemini(provider, model, instructions, input) {
+  const apiKey = requiredApiKey(provider);
+  const baseUrl = normalizedBaseUrl(provider.baseUrl || "https://generativelanguage.googleapis.com/v1beta");
+  const response = await fetch(`${baseUrl}/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: `${instructions}\n\n${input}` }] }],
+      generationConfig: { maxOutputTokens: 4000 },
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(providerErrorMessage(provider.name, response.status, body));
+  }
+  const parsed = JSON.parse(body);
+  const text = (parsed.candidates ?? [])
+    .flatMap((candidate) => candidate.content?.parts ?? [])
+    .map((part) => part.text)
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  if (!text) throw new Error("Gemini returned an empty draft response.");
+  return text;
+}
+
+async function callOllama(provider, model, instructions, input) {
+  const baseUrl = normalizedBaseUrl(provider.baseUrl || "http://localhost:11434");
+  const response = await fetch(`${baseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      system: instructions,
+      prompt: input,
+      stream: false,
+      options: { num_predict: 4000 },
+    }),
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(providerErrorMessage(provider.name, response.status, body));
+  }
+  const parsed = JSON.parse(body);
+  const text = parsed.response?.trim();
+  if (!text) throw new Error("Ollama returned an empty draft response.");
+  return text;
+}
+
+function extractOpenAIResponseText(response, providerName) {
   if (typeof response.output_text === "string" && response.output_text.trim()) {
     return response.output_text;
   }
@@ -107,7 +237,7 @@ function extractResponseText(response) {
     .trim();
 
   if (!text) {
-    throw new Error("OpenAI returned an empty draft response.");
+    throw new Error(`${providerName} returned an empty draft response.`);
   }
 
   return text;
@@ -128,22 +258,44 @@ function parseJsonObject(text) {
       return JSON.parse(text.slice(start, end + 1));
     }
 
-    throw new Error("OpenAI returned invalid JSON. Try regenerating the draft.");
+    throw new Error("Provider returned non-JSON for draft generation. Try regenerating, use a stricter model, or render a draft JSON manually.");
   }
 }
 
-function openAIErrorMessage(status, body) {
+function providerErrorMessage(providerName, status, body) {
   try {
     const parsed = JSON.parse(body);
-    const message = parsed?.error?.message;
+    const message = parsed?.error?.message || parsed?.error;
     if (message) {
-      return `OpenAI request failed (${status}): ${message}`;
+      return `${providerName} request failed (${status}): ${message}`;
     }
   } catch {
     // Fall through to generic message.
   }
 
-  return `OpenAI request failed (${status}).`;
+  return `${providerName} request failed (${status}).`;
+}
+
+function requiredApiKey(provider) {
+  if (!provider.apiKey?.trim()) {
+    throw new Error(`${provider.name} API key is required.`);
+  }
+  return provider.apiKey.trim();
+}
+
+function requiredBaseUrl(provider) {
+  if (!provider.baseUrl?.trim()) {
+    throw new Error(`${provider.name} base URL is required.`);
+  }
+  return provider.baseUrl;
+}
+
+function normalizedBaseUrl(value) {
+  const parsed = new URL(value);
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error("Base URL must start with http:// or https://.");
+  }
+  return value.replace(/\/+$/, "");
 }
 
 async function loadCore() {

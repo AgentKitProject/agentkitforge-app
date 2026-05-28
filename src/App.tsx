@@ -15,6 +15,17 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
+import {
+  aiProviderTypes,
+  getDefaultModelForProvider,
+  getKnownModelsForProvider,
+  getProviderCapabilities,
+  isApiKeyRequiredForProvider,
+  isBaseUrlRequiredForProvider,
+  normalizeBaseUrl,
+  providerSupportsStructuredJson,
+} from "../../agentkitforge-core/dist/providers/catalog.js";
+import type { AiProviderType } from "../../agentkitforge-core/dist/providers/types.js";
 import agentKitForgeIcon from "./assets/brand/agentkitforge-icon.svg";
 
 type SectionId = "my-kits" | "build" | "use" | "validate" | "settings";
@@ -22,12 +33,44 @@ type ExtendedSectionId = SectionId | "package-export" | "install-targets" | "abo
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
+type ThemeMode = "light" | "dark";
+type BuildTabId = "ai" | "guided" | "template" | "draft";
+
+type AiProviderConfig = {
+  id: string;
+  name: string;
+  providerType: AiProviderType;
+  baseUrl?: string;
+  hasApiKey: boolean;
+  defaultModel: string;
+  supportsStructuredJson: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type AiProviderForm = {
+  id?: string;
+  name: string;
+  providerType: AiProviderType;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel: string;
+  supportsStructuredJson: boolean;
+};
 
 type AppState = {
   currentKitPath: string;
+  currentKitName: string;
   defaultOutputFolder: string;
   openAiApiKey: string;
   preferredValidationProfile: ValidationProfile;
+};
+
+type KitMetadata = {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
 };
 
 type ValidationIssue = {
@@ -68,6 +111,7 @@ type GenerateAgentKitDraftInput = {
   desiredValidationLevel: ValidationProfile;
   constraints: string;
   sourceNotes: string;
+  providerId: string;
   model: string;
 };
 
@@ -75,7 +119,10 @@ type GenerateAgentKitDraftResult = {
   draftJson: unknown;
   draftJsonPretty: string;
   warnings: string[];
+  providerId: string;
+  providerName: string;
   model: string;
+  rawResponse?: string;
 };
 
 type CreateAgentKitInput = {
@@ -144,9 +191,12 @@ type ClaudeCodeExportResult = {
 type PublicSettings = {
   hasOpenaiApiKey: boolean;
   defaultModel: string;
+  aiProviders: AiProviderConfig[];
+  defaultAiProviderId?: string;
   defaultOutputFolder: string;
   preferredValidationProfile: ValidationProfile;
   preferredContextMode: AgentKitContextMode;
+  theme: ThemeMode;
   includePolicies: boolean;
   includeTemplates: boolean;
   includeWorkflows: boolean;
@@ -156,6 +206,8 @@ type PublicSettings = {
 
 type RunAgentKitResult = {
   response: string;
+  providerId: string;
+  providerName: string;
   model: string;
   kitName?: string;
   context: AgentKitContextDetails;
@@ -176,6 +228,79 @@ type AgentKitContextDetails = {
   approximateContextLength: number;
 };
 
+type RequiredInputFields = {
+  audience: string;
+  timeframe: string;
+  environment: string;
+  fileNotes: string;
+  other: string;
+};
+
+type GuidedBuilderStep =
+  | "basics"
+  | "skills"
+  | "guardrails"
+  | "outputs"
+  | "inputs"
+  | "examples"
+  | "review";
+
+type GuidedSkill = {
+  id: string;
+  name: string;
+  description: string;
+  triggers: string;
+  useWhen: string;
+  doNotUseWhen: string;
+  inputs: string;
+  procedure: string;
+  output: string;
+  riskLevel: string;
+};
+
+type GuidedGuardrail = {
+  id: string;
+  text: string;
+};
+
+type GuidedRequiredInput = {
+  id: string;
+  label: string;
+  description: string;
+  required: boolean;
+  inputType: "short-text" | "long-text" | "choice" | "multi-choice" | "date" | "number";
+  placeholder: string;
+  includeInPrompt: boolean;
+  choices: string;
+};
+
+type GuidedExample = {
+  id: string;
+  prompt: string;
+  requiredInputExamples: string;
+  output: string;
+};
+
+type GuidedBuilderState = {
+  name: string;
+  id: string;
+  description: string;
+  domain: string;
+  targetUsers: string;
+  validationLevel: ValidationProfile;
+  outputFolder: string;
+  skills: GuidedSkill[];
+  guardrails: GuidedGuardrail[];
+  outputSections: string;
+  outputTemplate: string;
+  documentLike: boolean;
+  downloadFileName: string;
+  summaryStyle: string;
+  requiredInputs: GuidedRequiredInput[];
+  examples: GuidedExample[];
+  force: boolean;
+};
+
 type NavItem = {
   id: ExtendedSectionId;
   label: string;
@@ -186,9 +311,50 @@ const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "
 const contextModes: AgentKitContextMode[] = ["all", "triggered"];
 const contextTargets: AgentKitContextTarget[] = ["openai", "chatgpt", "claude", "generic"];
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
+const buildTabs: { id: BuildTabId; label: string }[] = [
+  { id: "ai", label: "Build with AI" },
+  { id: "guided", label: "Guided Builder" },
+  { id: "template", label: "From Template" },
+  { id: "draft", label: "From Draft JSON" },
+];
+const guidedSteps: { id: GuidedBuilderStep; label: string }[] = [
+  { id: "basics", label: "Basics" },
+  { id: "skills", label: "Skills" },
+  { id: "guardrails", label: "Guardrails" },
+  { id: "outputs", label: "Outputs/Templates" },
+  { id: "inputs", label: "Required Inputs" },
+  { id: "examples", label: "Examples" },
+  { id: "review", label: "Review & Create" },
+];
+const knownDomains = [
+  "Finance / Accounting",
+  "Legal",
+  "Healthcare / Medical",
+  "DevOps / SRE",
+  "Cloud / Infrastructure",
+  "Security",
+  "Software Engineering",
+  "Data / Analytics",
+  "Sales / Marketing",
+  "Customer Support",
+  "Research",
+  "Education",
+  "Operations",
+  "General Business",
+  "Personal Productivity",
+  "Real Estate",
+  "HR / Recruiting",
+  "Procurement",
+  "Compliance",
+  "Product Management",
+  "Project Management",
+  "Writing / Editing",
+  "Design / Creative",
+  "Other / Custom",
+];
 const starterPrompt =
   "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
-const defaultRuntimeModel = "gpt-5-mini";
+const defaultRuntimeModel = getDefaultModelForProvider("openai") ?? "gpt-5.4-mini";
 const appVersion = "0.1.0";
 
 const navItems: NavItem[] = [
@@ -207,9 +373,12 @@ export function App() {
   const [settings, setSettings] = useState<PublicSettings>({
     hasOpenaiApiKey: false,
     defaultModel: defaultRuntimeModel,
+    aiProviders: [],
+    defaultAiProviderId: undefined,
     defaultOutputFolder: "",
     preferredValidationProfile: "local-valid",
     preferredContextMode: "triggered",
+    theme: "light",
     includePolicies: true,
     includeTemplates: true,
     includeWorkflows: true,
@@ -218,6 +387,7 @@ export function App() {
   });
   const [appState, setAppState] = useState<AppState>({
     currentKitPath: "",
+    currentKitName: "",
     defaultOutputFolder: "",
     openAiApiKey: "",
     preferredValidationProfile: "local-valid",
@@ -239,9 +409,12 @@ export function App() {
         setSettings({
           hasOpenaiApiKey: false,
           defaultModel: defaultRuntimeModel,
+          aiProviders: [],
+          defaultAiProviderId: undefined,
           defaultOutputFolder: "",
           preferredValidationProfile: "local-valid",
           preferredContextMode: "triggered",
+          theme: "light",
           includePolicies: true,
           includeTemplates: true,
           includeWorkflows: true,
@@ -250,6 +423,35 @@ export function App() {
         });
       });
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme || "light";
+  }, [settings.theme]);
+
+  useEffect(() => {
+    const trimmedPath = appState.currentKitPath.trim();
+    if (!trimmedPath) {
+      updateAppState("currentKitName", "");
+      return;
+    }
+
+    let isCurrent = true;
+    invoke<KitMetadata>("get_agent_kit_metadata", { rootPath: trimmedPath })
+      .then((metadata) => {
+        if (isCurrent) {
+          updateAppState("currentKitName", metadata.name || metadata.id || "Selected kit");
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          updateAppState("currentKitName", "Selected kit");
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [appState.currentKitPath]);
 
   function updateAppState<Key extends keyof AppState>(key: Key, value: AppState[Key]) {
     setAppState((current) => ({ ...current, [key]: value }));
@@ -295,7 +497,7 @@ export function App() {
 
         <div className="current-kit-panel">
           <div className="panel-label">Current Kit</div>
-          <div className="kit-path">{appState.currentKitPath || "No kit selected"}</div>
+          <div className="kit-path">{appState.currentKitName || "No kit selected"}</div>
         </div>
       </aside>
 
@@ -319,6 +521,7 @@ export function App() {
         <section className="content">
           {activeSection === "my-kits" && (
             <MyKitsScreen
+              onCurrentKitPathChange={(path) => updateAppState("currentKitPath", path)}
               onPackageKit={(path) => {
                 updateAppState("currentKitPath", path);
                 setActiveSection("package-export");
@@ -336,7 +539,18 @@ export function App() {
           )}
           {activeSection === "build" && (
             <BuildScreen
-              onKitReady={(rootPath) => addKitToLibrary(rootPath, "built")}
+              onKitReady={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+                addKitToLibrary(rootPath, "built");
+              }}
+              onPackageKit={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+                setActiveSection("package-export");
+              }}
+              onUseKit={(rootPath) => {
+                updateAppState("currentKitPath", rootPath);
+                setActiveSection("use");
+              }}
               settings={settings}
               onValidateCreatedKit={(rootPath, profile) => {
                 updateAppState("currentKitPath", rootPath);
@@ -346,7 +560,11 @@ export function App() {
             />
           )}
           {activeSection === "use" && (
-            <UseScreen currentKitPath={appState.currentKitPath} settings={settings} />
+            <UseScreen
+              currentKitPath={appState.currentKitPath}
+              onKitPathChange={(value) => updateAppState("currentKitPath", value)}
+              settings={settings}
+            />
           )}
           {activeSection === "validate" && (
             <ValidateScreen
@@ -359,12 +577,16 @@ export function App() {
           {activeSection === "package-export" && (
             <PackageExportScreen
               currentKitPath={appState.currentKitPath}
+              onKitPathChange={(value) => updateAppState("currentKitPath", value)}
               onKitPackaged={(path) => addKitToLibrary(path, "manual")}
               settings={settings}
             />
           )}
           {activeSection === "install-targets" && (
-            <InstallTargetsScreen currentKitPath={appState.currentKitPath} />
+            <InstallTargetsScreen
+              currentKitPath={appState.currentKitPath}
+              onKitPathChange={(value) => updateAppState("currentKitPath", value)}
+            />
           )}
           {activeSection === "settings" && (
             <SettingsScreen
@@ -382,10 +604,12 @@ export function App() {
 }
 
 function MyKitsScreen({
+  onCurrentKitPathChange,
   onPackageKit,
   onUseKit,
   onValidateKit,
 }: {
+  onCurrentKitPathChange: (path: string) => void;
   onPackageKit: (path: string) => void;
   onUseKit: (path: string) => void;
   onValidateKit: (path: string) => void;
@@ -433,6 +657,7 @@ function MyKitsScreen({
         await invoke<MyKitEntry>("add_kit_to_library", {
           input: { path: selectedPath, source: "manual" },
         });
+        onCurrentKitPathChange(selectedPath);
         await loadKits();
       }
     } catch (caughtError) {
@@ -500,6 +725,7 @@ function MyKitsScreen({
         input: importForm,
       });
       setImportResult(result);
+      onCurrentKitPathChange(result.extractedPath);
 
       if (result.validationReport.valid) {
         await invoke<MyKitEntry>("add_kit_to_library", {
@@ -523,6 +749,7 @@ function MyKitsScreen({
       await invoke<MyKitEntry>("add_kit_to_library", {
         input: { path: importResult.extractedPath, source: "imported" },
       });
+      onCurrentKitPathChange(importResult.extractedPath);
       await loadKits();
     } catch (caughtError) {
       setImportError(errorToMessage(caughtError));
@@ -660,8 +887,8 @@ function MyKitsScreen({
                 <dd>{kit.version}</dd>
               </div>
               <div>
-                <dt>Path</dt>
-                <dd>{kit.path}</dd>
+                <dt>Location</dt>
+                <dd>{friendlyLocation(kit.path)}</dd>
               </div>
               <div>
                 <dt>Validation</dt>
@@ -672,6 +899,15 @@ function MyKitsScreen({
                 <dd>{formatTimestamp(kit.lastUsedAt)}</dd>
               </div>
             </dl>
+            <details className="advanced-details">
+              <summary>Advanced details</summary>
+              <dl className="report-meta">
+                <div>
+                  <dt>Full folder path</dt>
+                  <dd>{kit.path}</dd>
+                </div>
+              </dl>
+            </details>
 
             <div className="button-row">
               <button className="secondary-button compact-button" disabled={!kit.pathExists} onClick={() => onUseKit(kit.path)} type="button">
@@ -817,14 +1053,23 @@ function ImportPackagePanel({
           </div>
           <dl className="report-meta">
             <div>
-              <dt>Extracted path</dt>
-              <dd>{importResult.extractedPath}</dd>
+              <dt>Imported location</dt>
+              <dd>{friendlyLocation(importResult.extractedPath)}</dd>
             </div>
             <div>
               <dt>Kit</dt>
               <dd>{importResult.metadata.name} {importResult.metadata.version}</dd>
             </div>
           </dl>
+          <details className="advanced-details">
+            <summary>Advanced details</summary>
+            <dl className="report-meta">
+              <div>
+                <dt>Full folder path</dt>
+                <dd>{importResult.extractedPath}</dd>
+              </div>
+            </dl>
+          </details>
           {!importResult.validationReport.valid && (
             <>
               <IssueGroup issues={importResult.validationReport.issues.filter((issue) => issue.severity === "error")} severity="error" />
@@ -858,10 +1103,14 @@ type ImportPackagePanelProps = {
 
 function BuildScreen({
   onKitReady,
+  onPackageKit,
+  onUseKit,
   onValidateCreatedKit,
   settings,
 }: {
   onKitReady: (rootPath: string) => void;
+  onPackageKit: (rootPath: string) => void;
+  onUseKit: (rootPath: string) => void;
   onValidateCreatedKit: (rootPath: string, profile: ValidationProfile) => void;
   settings: PublicSettings;
 }) {
@@ -900,6 +1149,7 @@ function BuildScreen({
     desiredValidationLevel: "local-valid",
     constraints: "",
     sourceNotes: "",
+    providerId: settings.defaultAiProviderId || "",
     model: settings.defaultModel || defaultRuntimeModel,
   });
   const [aiResult, setAiResult] = useState<GenerateAgentKitDraftResult | null>(null);
@@ -919,15 +1169,252 @@ function BuildScreen({
   const [generatedRenderError, setGeneratedRenderError] = useState<string | null>(null);
   const [isSelectingGeneratedRenderOutput, setIsSelectingGeneratedRenderOutput] = useState(false);
   const [isRenderingGeneratedDraft, setIsRenderingGeneratedDraft] = useState(false);
+  const [activeBuildTab, setActiveBuildTab] = useState<BuildTabId>(() => {
+    const saved = window.localStorage.getItem("agentkitforge.lastBuildTab") as BuildTabId | null;
+    return saved && buildTabs.some((tab) => tab.id === saved) ? saved : "ai";
+  });
+  const [guidedStep, setGuidedStep] = useState<GuidedBuilderStep>("basics");
+  const [guidedForm, setGuidedForm] = useState<GuidedBuilderState>(() =>
+    createDefaultGuidedBuilderState(settings.defaultOutputFolder),
+  );
+  const [guidedError, setGuidedError] = useState<string | null>(null);
+  const [guidedResult, setGuidedResult] = useState<RenderAgentKitDraftResult | null>(null);
+  const [guidedValidationReport, setGuidedValidationReport] = useState<ValidationReport | null>(null);
+  const [isCreatingGuidedKit, setIsCreatingGuidedKit] = useState(false);
+  const [isSelectingGuidedOutput, setIsSelectingGuidedOutput] = useState(false);
+
+  function selectBuildTab(tabId: BuildTabId) {
+    setActiveBuildTab(tabId);
+    window.localStorage.setItem("agentkitforge.lastBuildTab", tabId);
+  }
+
+  function updateGuidedForm<Key extends keyof GuidedBuilderState>(
+    key: Key,
+    value: GuidedBuilderState[Key],
+  ) {
+    setGuidedForm((current) => ({ ...current, [key]: value }));
+    setGuidedError(null);
+    setGuidedResult(null);
+    setGuidedValidationReport(null);
+  }
+
+  function updateGuidedName(name: string) {
+    setGuidedForm((current) => ({
+      ...current,
+      name,
+      id: current.id.trim() === "" || current.id === slugify(current.name) ? slugify(name) : current.id,
+      downloadFileName:
+        current.downloadFileName.trim() === "" || current.downloadFileName === `${slugify(current.name)}-output`
+          ? `${slugify(name)}-output`
+          : current.downloadFileName,
+    }));
+  }
+
+  function updateGuidedSkill(index: number, patch: Partial<GuidedSkill>) {
+    setGuidedForm((current) => ({
+      ...current,
+      skills: current.skills.map((skill, skillIndex) => {
+        if (skillIndex !== index) {
+          return skill;
+        }
+        const next = { ...skill, ...patch };
+        if (patch.name && (skill.id.trim() === "" || skill.id === slugify(skill.name))) {
+          next.id = slugify(patch.name);
+        }
+        return next;
+      }),
+    }));
+  }
+
+  function addGuidedSkill() {
+    setGuidedForm((current) => ({
+      ...current,
+      skills: [...current.skills, createDefaultGuidedSkill(current.skills.length + 1)],
+    }));
+  }
+
+  function removeGuidedSkill(index: number) {
+    setGuidedForm((current) => ({
+      ...current,
+      skills:
+        current.skills.length > 1
+          ? current.skills.filter((_, skillIndex) => skillIndex !== index)
+          : current.skills,
+    }));
+  }
+
+  function updateGuidedGuardrail(index: number, text: string) {
+    setGuidedForm((current) => ({
+      ...current,
+      guardrails: current.guardrails.map((guardrail, guardrailIndex) =>
+        guardrailIndex === index ? { ...guardrail, text } : guardrail,
+      ),
+    }));
+  }
+
+  function addGuidedGuardrail(text = "") {
+    setGuidedForm((current) => ({
+      ...current,
+      guardrails: [
+        ...current.guardrails,
+        { id: `guardrail-${current.guardrails.length + 1}`, text },
+      ],
+    }));
+  }
+
+  function removeGuidedGuardrail(index: number) {
+    setGuidedForm((current) => ({
+      ...current,
+      guardrails: current.guardrails.filter((_, guardrailIndex) => guardrailIndex !== index),
+    }));
+  }
+
+  function addDomainGuardrailPreset() {
+    const preset = guardrailPresetForDomain(guidedForm.domain);
+    if (preset) {
+      addGuidedGuardrail(preset);
+    }
+  }
+
+  function updateGuidedRequiredInput(index: number, patch: Partial<GuidedRequiredInput>) {
+    setGuidedForm((current) => ({
+      ...current,
+      requiredInputs: current.requiredInputs.map((input, inputIndex) => {
+        if (inputIndex !== index) {
+          return input;
+        }
+        const next = { ...input, ...patch };
+        if (patch.label && (input.id.trim() === "" || input.id === slugify(input.label))) {
+          next.id = slugify(patch.label);
+        }
+        return next;
+      }),
+    }));
+  }
+
+  function addGuidedRequiredInput() {
+    setGuidedForm((current) => ({
+      ...current,
+      requiredInputs: [...current.requiredInputs, createDefaultRequiredInput(current.requiredInputs.length + 1)],
+    }));
+  }
+
+  function removeGuidedRequiredInput(index: number) {
+    setGuidedForm((current) => ({
+      ...current,
+      requiredInputs: current.requiredInputs.filter((_, inputIndex) => inputIndex !== index),
+    }));
+  }
+
+  function updateGuidedExample(index: number, patch: Partial<GuidedExample>) {
+    setGuidedForm((current) => ({
+      ...current,
+      examples: current.examples.map((example, exampleIndex) => {
+        if (exampleIndex !== index) {
+          return example;
+        }
+        const next = { ...example, ...patch };
+        if (patch.prompt && (example.id.trim() === "" || example.id.startsWith("example-"))) {
+          next.id = slugify(patch.prompt).slice(0, 40) || `example-${index + 1}`;
+        }
+        return next;
+      }),
+    }));
+  }
+
+  function addGuidedExample() {
+    setGuidedForm((current) => ({
+      ...current,
+      examples: [...current.examples, createDefaultExample(current.examples.length + 1)],
+    }));
+  }
+
+  function removeGuidedExample(index: number) {
+    setGuidedForm((current) => ({
+      ...current,
+      examples: current.examples.filter((_, exampleIndex) => exampleIndex !== index),
+    }));
+  }
+
+  async function selectGuidedOutputFolder() {
+    setIsSelectingGuidedOutput(true);
+    setGuidedError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateGuidedForm("outputFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setGuidedError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingGuidedOutput(false);
+    }
+  }
+
+  async function createGuidedKit(mode: "create" | "validate" | "validate-add") {
+    const validationError = validateGuidedBuilder(guidedForm);
+    setGuidedError(validationError);
+    setGuidedResult(null);
+    setGuidedValidationReport(null);
+
+    if (validationError) {
+      return;
+    }
+
+    setIsCreatingGuidedKit(true);
+
+    try {
+      const draft = buildGuidedAgentKitDraft(guidedForm);
+      const result = await invoke<RenderAgentKitDraftResult>("render_generated_agent_kit_draft", {
+        input: {
+          draftJson: draft,
+          outputFolder: guidedTargetOutputFolder(guidedForm),
+          force: guidedForm.force,
+        },
+      });
+      setGuidedResult(result);
+      onKitReady(result.rootPath);
+
+      if (mode === "validate" || mode === "validate-add") {
+        const report = await invoke<ValidationReport>("validate_agent_kit", {
+          rootPath: result.rootPath,
+          profile: guidedDefaultValidationProfile(guidedForm),
+        });
+        setGuidedValidationReport(report);
+      }
+    } catch (caughtError) {
+      setGuidedError(errorToMessage(caughtError));
+    } finally {
+      setIsCreatingGuidedKit(false);
+    }
+  }
+
+  async function openGuidedFolder() {
+    if (!guidedResult) {
+      return;
+    }
+    try {
+      await invoke("open_folder", { path: guidedResult.rootPath });
+    } catch (caughtError) {
+      setGuidedError(errorToMessage(caughtError));
+    }
+  }
 
   useEffect(() => {
-    setAiForm((current) => ({ ...current, model: settings.defaultModel || defaultRuntimeModel }));
-  }, [settings.defaultModel]);
+    const provider = getSelectedProvider(settings, aiForm.providerId);
+    setAiForm((current) => ({
+      ...current,
+      providerId: current.providerId || settings.defaultAiProviderId || "",
+      model: current.model || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel,
+    }));
+  }, [settings]);
 
   useEffect(() => {
     setForm((current) => ({ ...current, outputFolder: current.outputFolder || settings.defaultOutputFolder }));
     setDraftForm((current) => ({ ...current, outputFolder: current.outputFolder || settings.defaultOutputFolder }));
     setGeneratedRenderOutputFolder((current) => current || settings.defaultOutputFolder);
+    setGuidedForm((current) => ({ ...current, outputFolder: current.outputFolder || settings.defaultOutputFolder }));
   }, [settings.defaultOutputFolder]);
 
   function updateForm<Key extends keyof CreateAgentKitInput>(
@@ -1080,7 +1567,7 @@ function BuildScreen({
 
     try {
       const result = await invoke<GenerateAgentKitDraftResult>(
-        "generate_agent_kit_draft_with_openai",
+        "generate_agent_kit_draft_with_ai",
         { input: aiForm },
       );
       setAiResult(result);
@@ -1179,15 +1666,41 @@ function BuildScreen({
 
   return (
     <div className="build-screen">
+      <div className="tab-list" role="tablist" aria-label="Builder modes">
+        {buildTabs.map((tab) => (
+          <button
+            aria-selected={activeBuildTab === tab.id}
+            className={`tab-button ${activeBuildTab === tab.id ? "active" : ""}`}
+            key={tab.id}
+            onClick={() => selectBuildTab(tab.id)}
+            role="tab"
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {activeBuildTab === "ai" && (
       <div className="build-layout">
         <div className="form-panel">
-          <h2>Build with OpenAI</h2>
+          <h2>Build with AI</h2>
 
-          {!settings.hasOpenaiApiKey && (
-            <div className="inline-warning">Add an OpenAI API key in Settings before generating drafts.</div>
+          {settings.aiProviders.length === 0 && (
+            <div className="inline-warning">Add an AI provider in Settings before generating drafts.</div>
+          )}
+          {selectedProviderSupportsStructuredJson(getSelectedProvider(settings, aiForm.providerId), aiForm.model) === false && (
+            <div className="inline-warning">
+              This provider may not reliably return valid AgentKitDraft JSON. AgentKitForge will
+              validate the draft before rendering it.
+            </div>
           )}
 
-          <label htmlFor="ai-user-request">Describe the Agent Kit you want</label>
+          <LabelWithHelp
+            htmlFor="ai-user-request"
+            label="Describe the Agent Kit you want"
+            help="Tell AgentKitForge what this kit should help someone do. Plain language is best."
+          />
           <textarea
             id="ai-user-request"
             onChange={(event) => updateAiForm("userRequest", event.target.value)}
@@ -1198,15 +1711,50 @@ function BuildScreen({
           <FieldError message={aiFieldErrors.userRequest} />
           <FieldError message={aiFieldErrors.apiKey} />
 
-          <label htmlFor="ai-domain">Domain</label>
-          <input
+          <LabelWithHelp
+            htmlFor="ai-provider"
+            label="AI provider"
+            help="Choose the AI service or local model that will draft the kit."
+          />
+          <select
+            id="ai-provider"
+            onChange={(event) => {
+              const provider = settings.aiProviders.find((item) => item.id === event.target.value);
+              setAiForm((current) => ({
+                ...current,
+                providerId: event.target.value,
+                model: provider?.defaultModel || current.model,
+              }));
+              setAiResult(null);
+              setAiError(null);
+            }}
+            value={aiForm.providerId}
+          >
+            <option value="">Select provider</option>
+            {settings.aiProviders.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name} ({provider.providerType})
+              </option>
+            ))}
+          </select>
+          <FieldError message={aiFieldErrors.providerId} />
+
+          <LabelWithHelp
+            htmlFor="ai-domain"
+            label="Domain"
+            help="Pick the work area this kit belongs to. You can type your own if it is not listed."
+          />
+          <DomainSelector
             id="ai-domain"
-            onChange={(event) => updateAiForm("domain", event.target.value)}
-            placeholder="Finance, support, legal ops, software delivery..."
+            onChange={(value) => updateAiForm("domain", value)}
             value={aiForm.domain}
           />
 
-          <label htmlFor="ai-target-users">Target users</label>
+          <LabelWithHelp
+            htmlFor="ai-target-users"
+            label="Target users"
+            help="Who will use this kit, such as analysts, support agents, managers, or engineers."
+          />
           <input
             id="ai-target-users"
             onChange={(event) => updateAiForm("targetUsers", event.target.value)}
@@ -1214,7 +1762,11 @@ function BuildScreen({
             value={aiForm.targetUsers}
           />
 
-          <label htmlFor="ai-validation-level">Desired validation level</label>
+          <LabelWithHelp
+            htmlFor="ai-validation-level"
+            label="Desired validation level"
+            help="Higher levels ask for more complete kit materials. Start with local-valid while experimenting."
+          />
           <select
             id="ai-validation-level"
             onChange={(event) =>
@@ -1248,11 +1800,16 @@ function BuildScreen({
             value={aiForm.sourceNotes}
           />
 
-          <label htmlFor="ai-model">Model</label>
-          <input
+          <LabelWithHelp
+            htmlFor="ai-model"
+            label="Model"
+            help="Use a suggested model or type a custom model ID from your provider."
+          />
+          <ModelInput
             id="ai-model"
-            onChange={(event) => updateAiForm("model", event.target.value)}
-            value={aiForm.model}
+            model={aiForm.model}
+            onModelChange={(value) => updateAiForm("model", value)}
+            providerType={getSelectedProvider(settings, aiForm.providerId)?.providerType}
           />
 
           <button
@@ -1294,12 +1851,52 @@ function BuildScreen({
           />
         </div>
       </div>
+      )}
 
+      {activeBuildTab === "guided" && (
+        <GuidedBuilder
+          error={guidedError}
+          form={guidedForm}
+          isCreating={isCreatingGuidedKit}
+          isSelectingOutput={isSelectingGuidedOutput}
+          onAddExample={addGuidedExample}
+          onAddGuardrail={() => addGuidedGuardrail()}
+          onAddInput={addGuidedRequiredInput}
+          onAddSkill={addGuidedSkill}
+          onApplyPreset={addDomainGuardrailPreset}
+          onCreate={createGuidedKit}
+          onOpenFolder={openGuidedFolder}
+          onPackageKit={onPackageKit}
+          onRemoveExample={removeGuidedExample}
+          onRemoveGuardrail={removeGuidedGuardrail}
+          onRemoveInput={removeGuidedRequiredInput}
+          onRemoveSkill={removeGuidedSkill}
+          onSelectOutput={selectGuidedOutputFolder}
+          onStepChange={setGuidedStep}
+          onUpdate={updateGuidedForm}
+          onUpdateExample={updateGuidedExample}
+          onUpdateGuardrail={updateGuidedGuardrail}
+          onUpdateInput={updateGuidedRequiredInput}
+          onUpdateName={updateGuidedName}
+          onUpdateSkill={updateGuidedSkill}
+          onUseKit={onUseKit}
+          onValidateKit={(rootPath) => onValidateCreatedKit(rootPath, guidedDefaultValidationProfile(guidedForm))}
+          result={guidedResult}
+          step={guidedStep}
+          validationReport={guidedValidationReport}
+        />
+      )}
+
+      {activeBuildTab === "template" && (
       <div className="build-layout">
         <div className="form-panel">
           <h2>Create from template</h2>
 
-        <label htmlFor="build-output-folder">Target output folder</label>
+        <LabelWithHelp
+          htmlFor="build-output-folder"
+          label="Save location"
+          help="New kits are saved in your AgentKitForge Kits folder by default. You can choose a different folder."
+        />
         <div className="path-picker">
           <input
             id="build-output-folder"
@@ -1369,6 +1966,7 @@ function BuildScreen({
             type="checkbox"
           />
           <span>Force overwrite template files</span>
+          <HelpTip text="Use this only when you intentionally want generated files to replace files in the same kit folder." />
         </label>
 
         <button className="primary-button" disabled={isCreating} onClick={createKit} type="button">
@@ -1388,7 +1986,9 @@ function BuildScreen({
           />
         </div>
       </div>
+      )}
 
+      {activeBuildTab === "draft" && (
       <div className="build-layout">
         <div className="form-panel">
           <h2>Render from Draft JSON</h2>
@@ -1413,7 +2013,11 @@ function BuildScreen({
           </div>
           <FieldError message={draftFieldErrors.draftFilePath} />
 
-          <label htmlFor="draft-output-folder">Target output folder</label>
+          <LabelWithHelp
+            htmlFor="draft-output-folder"
+            label="Save location"
+            help="The rendered kit will be written to this folder and can be added to My Kits."
+          />
           <div className="path-picker">
             <input
               id="draft-output-folder"
@@ -1441,6 +2045,7 @@ function BuildScreen({
               type="checkbox"
             />
             <span>Force overwrite generated files</span>
+            <HelpTip text="Use this only when you intentionally want generated files to replace existing files." />
           </label>
 
           <button
@@ -1464,8 +2069,362 @@ function BuildScreen({
           />
         </div>
       </div>
+      )}
 
     </div>
+  );
+}
+
+function GuidedBuilder({
+  error,
+  form,
+  isCreating,
+  isSelectingOutput,
+  onAddExample,
+  onAddGuardrail,
+  onAddInput,
+  onAddSkill,
+  onApplyPreset,
+  onCreate,
+  onOpenFolder,
+  onPackageKit,
+  onRemoveExample,
+  onRemoveGuardrail,
+  onRemoveInput,
+  onRemoveSkill,
+  onSelectOutput,
+  onStepChange,
+  onUpdate,
+  onUpdateExample,
+  onUpdateGuardrail,
+  onUpdateInput,
+  onUpdateName,
+  onUpdateSkill,
+  onUseKit,
+  onValidateKit,
+  result,
+  step,
+  validationReport,
+}: {
+  error: string | null;
+  form: GuidedBuilderState;
+  isCreating: boolean;
+  isSelectingOutput: boolean;
+  onAddExample: () => void;
+  onAddGuardrail: () => void;
+  onAddInput: () => void;
+  onAddSkill: () => void;
+  onApplyPreset: () => void;
+  onCreate: (mode: "create" | "validate" | "validate-add") => void;
+  onOpenFolder: () => void;
+  onPackageKit: (rootPath: string) => void;
+  onRemoveExample: (index: number) => void;
+  onRemoveGuardrail: (index: number) => void;
+  onRemoveInput: (index: number) => void;
+  onRemoveSkill: (index: number) => void;
+  onSelectOutput: () => void;
+  onStepChange: (step: GuidedBuilderStep) => void;
+  onUpdate: <Key extends keyof GuidedBuilderState>(key: Key, value: GuidedBuilderState[Key]) => void;
+  onUpdateExample: (index: number, patch: Partial<GuidedExample>) => void;
+  onUpdateGuardrail: (index: number, text: string) => void;
+  onUpdateInput: (index: number, patch: Partial<GuidedRequiredInput>) => void;
+  onUpdateName: (name: string) => void;
+  onUpdateSkill: (index: number, patch: Partial<GuidedSkill>) => void;
+  onUseKit: (rootPath: string) => void;
+  onValidateKit: (rootPath: string) => void;
+  result: RenderAgentKitDraftResult | null;
+  step: GuidedBuilderStep;
+  validationReport: ValidationReport | null;
+}) {
+  const stepIndex = guidedSteps.findIndex((item) => item.id === step);
+  const canGoBack = stepIndex > 0;
+  const canGoForward = stepIndex < guidedSteps.length - 1;
+
+  return (
+    <div className="guided-builder">
+      <div className="guided-stepper" aria-label="Guided Builder steps">
+        {guidedSteps.map((item, index) => (
+          <button
+            className={`step-button ${item.id === step ? "active" : ""}`}
+            key={item.id}
+            onClick={() => onStepChange(item.id)}
+            type="button"
+          >
+            <span>{index + 1}</span>
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="build-layout">
+        <div className="form-panel guided-builder-panel">
+          {step === "basics" && (
+            <>
+              <h2>Basics</h2>
+              <LabelWithHelp htmlFor="guided-name" label="Kit name" help="Use a friendly name people will recognize." />
+              <input id="guided-name" onChange={(event) => onUpdateName(event.target.value)} placeholder="Quarterly Board Reporting Assistant" value={form.name} />
+
+              <details className="advanced-details">
+                <summary>Advanced: Kit ID</summary>
+                <LabelWithHelp htmlFor="guided-id" label="Kit ID" help="This becomes the folder-friendly kit identifier. Lowercase letters, numbers, and hyphens work best." />
+                <input id="guided-id" onChange={(event) => onUpdate("id", slugify(event.target.value))} value={form.id} />
+              </details>
+
+              <LabelWithHelp htmlFor="guided-description" label="Description" help="A short explanation of what this kit helps users do." />
+              <textarea id="guided-description" onChange={(event) => onUpdate("description", event.target.value)} rows={4} value={form.description} />
+
+              <LabelWithHelp htmlFor="guided-domain" label="Domain" help="Pick the closest work area, or type a custom domain." />
+              <DomainSelector id="guided-domain" onChange={(value) => onUpdate("domain", value)} value={form.domain} />
+
+              <LabelWithHelp htmlFor="guided-target-users" label="Target users" help="Who will use the kit?" />
+              <input id="guided-target-users" onChange={(event) => onUpdate("targetUsers", event.target.value)} placeholder="Analysts, operators, managers..." value={form.targetUsers} />
+
+              <LabelWithHelp htmlFor="guided-validation" label="Desired validation level" help="Trusted is best when you include guardrails and examples." />
+              <select id="guided-validation" onChange={(event) => onUpdate("validationLevel", event.target.value as ValidationProfile)} value={form.validationLevel}>
+                {validationProfiles.map((profile) => <option key={profile} value={profile}>{profile}</option>)}
+              </select>
+
+              <LabelWithHelp htmlFor="guided-output-folder" label="Save location" help="Defaults to your AgentKitForge Kits folder. You can choose another folder." />
+              <div className="path-picker">
+                <input id="guided-output-folder" onChange={(event) => onUpdate("outputFolder", event.target.value)} value={form.outputFolder} />
+                <button className="icon-button" disabled={isSelectingOutput || isCreating} onClick={onSelectOutput} title="Select save location" type="button">
+                  <FolderOpen size={18} />
+                </button>
+              </div>
+            </>
+          )}
+
+          {step === "skills" && (
+            <>
+              <div className="panel-heading">
+                <h2>Skills</h2>
+                <button className="secondary-button compact-button" onClick={onAddSkill} type="button">Add skill</button>
+              </div>
+              {form.skills.map((skill, index) => (
+                <article className="guided-card" key={`${skill.id}-${index}`}>
+                  <div className="panel-heading">
+                    <h3>Skill {index + 1}</h3>
+                    <button className="secondary-button compact-button" disabled={form.skills.length === 1} onClick={() => onRemoveSkill(index)} type="button">Remove</button>
+                  </div>
+                  <LabelWithHelp htmlFor={`skill-name-${index}`} label="Skill name" help="Name one repeatable thing the kit can do." />
+                  <input id={`skill-name-${index}`} onChange={(event) => onUpdateSkill(index, { name: event.target.value })} value={skill.name} />
+                  <details className="advanced-details">
+                    <summary>Advanced: Skill ID</summary>
+                    <input onChange={(event) => onUpdateSkill(index, { id: slugify(event.target.value) })} value={skill.id} />
+                  </details>
+                  <label>Description</label>
+                  <input onChange={(event) => onUpdateSkill(index, { description: event.target.value })} value={skill.description} />
+                  <label>Trigger phrases</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { triggers: event.target.value })} placeholder="One per line, such as review workbook or summarize risks" rows={3} value={skill.triggers} />
+                  <label>Use when</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { useWhen: event.target.value })} rows={3} value={skill.useWhen} />
+                  <label>Do not use when</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { doNotUseWhen: event.target.value })} rows={2} value={skill.doNotUseWhen} />
+                  <label>Inputs</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { inputs: event.target.value })} rows={2} value={skill.inputs} />
+                  <label>Procedure steps</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { procedure: event.target.value })} rows={5} value={skill.procedure} />
+                  <label>Output expectations</label>
+                  <textarea onChange={(event) => onUpdateSkill(index, { output: event.target.value })} rows={3} value={skill.output} />
+                  <label>Risk level</label>
+                  <select onChange={(event) => onUpdateSkill(index, { riskLevel: event.target.value })} value={skill.riskLevel}>
+                    {["low", "medium", "high"].map((risk) => <option key={risk} value={risk}>{risk}</option>)}
+                  </select>
+                </article>
+              ))}
+            </>
+          )}
+
+          {step === "guardrails" && (
+            <>
+              <div className="panel-heading">
+                <h2>Guardrails</h2>
+                <div className="button-row">
+                  <button className="secondary-button compact-button" onClick={onApplyPreset} type="button">Add domain preset</button>
+                  <button className="secondary-button compact-button" onClick={onAddGuardrail} type="button">Add custom</button>
+                </div>
+              </div>
+              {form.guardrails.length === 0 && <p className="state-copy">Add guardrails to help users understand boundaries and review expectations.</p>}
+              {form.guardrails.map((guardrail, index) => (
+                <div className="guided-list-row" key={`${guardrail.id}-${index}`}>
+                  <textarea onChange={(event) => onUpdateGuardrail(index, event.target.value)} rows={2} value={guardrail.text} />
+                  <button className="secondary-button compact-button" onClick={() => onRemoveGuardrail(index)} type="button">Remove</button>
+                </div>
+              ))}
+            </>
+          )}
+
+          {step === "outputs" && (
+            <>
+              <h2>Outputs/Templates</h2>
+              <LabelWithHelp htmlFor="guided-output-sections" label="Expected output sections" help="List the sections users should usually receive." />
+              <textarea id="guided-output-sections" onChange={(event) => onUpdate("outputSections", event.target.value)} rows={4} value={form.outputSections} />
+              <label>Optional output template</label>
+              <textarea onChange={(event) => onUpdate("outputTemplate", event.target.value)} rows={6} value={form.outputTemplate} />
+              <label className="checkbox-row">
+                <input checked={form.documentLike} onChange={(event) => onUpdate("documentLike", event.target.checked)} type="checkbox" />
+                <span>Result is document-like</span>
+              </label>
+              <label>Suggested downloadable output name</label>
+              <input onChange={(event) => onUpdate("downloadFileName", event.target.value)} value={form.downloadFileName} />
+              <label>Client/user-facing summary style</label>
+              <input onChange={(event) => onUpdate("summaryStyle", event.target.value)} placeholder="Concise executive summary, detailed checklist..." value={form.summaryStyle} />
+            </>
+          )}
+
+          {step === "inputs" && (
+            <>
+              <div className="panel-heading">
+                <h2>Required Inputs</h2>
+                <button className="secondary-button compact-button" onClick={onAddInput} type="button">Add input</button>
+              </div>
+              <p className="form-copy">These fields tell AgentKitForge what users should provide before running the kit.</p>
+              {form.requiredInputs.map((input, index) => (
+                <article className="guided-card" key={`${input.id}-${index}`}>
+                  <div className="panel-heading">
+                    <h3>Input {index + 1}</h3>
+                    <button className="secondary-button compact-button" onClick={() => onRemoveInput(index)} type="button">Remove</button>
+                  </div>
+                  <label>Label</label>
+                  <input onChange={(event) => onUpdateInput(index, { label: event.target.value })} value={input.label} />
+                  <label>Description/help text</label>
+                  <input onChange={(event) => onUpdateInput(index, { description: event.target.value })} value={input.description} />
+                  <div className="settings-grid two-column">
+                    <label className="checkbox-row">
+                      <input checked={input.required} onChange={(event) => onUpdateInput(index, { required: event.target.checked })} type="checkbox" />
+                      <span>Required</span>
+                    </label>
+                    <label className="checkbox-row">
+                      <input checked={input.includeInPrompt} onChange={(event) => onUpdateInput(index, { includeInPrompt: event.target.checked })} type="checkbox" />
+                      <span>Include in prompt</span>
+                    </label>
+                  </div>
+                  <label>Input type</label>
+                  <select onChange={(event) => onUpdateInput(index, { inputType: event.target.value as GuidedRequiredInput["inputType"] })} value={input.inputType}>
+                    <option value="short-text">short text</option>
+                    <option value="long-text">long text</option>
+                    <option value="choice">choice</option>
+                    <option value="multi-choice">multi-choice</option>
+                    <option value="date">date</option>
+                    <option value="number">number</option>
+                  </select>
+                  <label>Placeholder/example</label>
+                  <input onChange={(event) => onUpdateInput(index, { placeholder: event.target.value })} value={input.placeholder} />
+                  {(input.inputType === "choice" || input.inputType === "multi-choice") && (
+                    <>
+                      <label>Choices</label>
+                      <textarea onChange={(event) => onUpdateInput(index, { choices: event.target.value })} placeholder="One option per line" rows={3} value={input.choices} />
+                    </>
+                  )}
+                </article>
+              ))}
+            </>
+          )}
+
+          {step === "examples" && (
+            <>
+              <div className="panel-heading">
+                <h2>Examples</h2>
+                <button className="secondary-button compact-button" onClick={onAddExample} type="button">Add example</button>
+              </div>
+              {form.examples.map((example, index) => (
+                <article className="guided-card" key={`${example.id}-${index}`}>
+                  <div className="panel-heading">
+                    <h3>Example {index + 1}</h3>
+                    <button className="secondary-button compact-button" onClick={() => onRemoveExample(index)} type="button">Remove</button>
+                  </div>
+                  <label>Example prompt</label>
+                  <textarea onChange={(event) => onUpdateExample(index, { prompt: event.target.value })} rows={4} value={example.prompt} />
+                  <label>Required input examples</label>
+                  <textarea onChange={(event) => onUpdateExample(index, { requiredInputExamples: event.target.value })} rows={3} value={example.requiredInputExamples} />
+                  <label>Expected output example</label>
+                  <textarea onChange={(event) => onUpdateExample(index, { output: event.target.value })} rows={5} value={example.output} />
+                </article>
+              ))}
+            </>
+          )}
+
+          {step === "review" && (
+            <>
+              <h2>Review & Create</h2>
+              <GuidedReviewSummary form={form} />
+              <label className="checkbox-row">
+                <input checked={form.force} onChange={(event) => onUpdate("force", event.target.checked)} type="checkbox" />
+                <span>Force overwrite generated files</span>
+                <HelpTip text="Use only when intentionally replacing generated files in the destination." />
+              </label>
+              <div className="button-row">
+                <button className="primary-button" disabled={isCreating} onClick={() => onCreate("create")} type="button">
+                  {isCreating ? "Creating" : "Create Agent Kit"}
+                </button>
+                <button className="secondary-button" disabled={isCreating} onClick={() => onCreate("validate")} type="button">
+                  Create and Validate
+                </button>
+                <button className="secondary-button" disabled={isCreating} onClick={() => onCreate("validate-add")} type="button">
+                  Create, Validate, and Add to My Kits
+                </button>
+              </div>
+            </>
+          )}
+
+          {error && <div className="error-state" role="alert">{error}</div>}
+
+          <div className="wizard-nav">
+            <button className="secondary-button" disabled={!canGoBack} onClick={() => onStepChange(guidedSteps[stepIndex - 1].id)} type="button">Back</button>
+            <button className="primary-button" disabled={!canGoForward} onClick={() => onStepChange(guidedSteps[stepIndex + 1].id)} type="button">Next</button>
+          </div>
+        </div>
+
+        <div className="results-panel">
+          <div className="panel-label">Guided Builder Result</div>
+          {!result && !validationReport && <p className="state-copy">Complete the steps, then create the kit from Review & Create.</p>}
+          {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
+          {result && (
+            <div className="create-result">
+              <div className="status-banner valid">
+                <strong>{form.name || "Agent Kit"} created</strong>
+                <span>{result.files.length} generated files</span>
+              </div>
+              <dl className="report-meta">
+                <div><dt>Kit</dt><dd>{form.name}</dd></div>
+                <div><dt>Location</dt><dd>{friendlyLocation(result.rootPath)}</dd></div>
+                <div><dt>Validation target</dt><dd>{guidedDefaultValidationProfile(form)}</dd></div>
+              </dl>
+              <div className="button-row">
+                <button className="primary-button compact-button" onClick={() => onUseKit(result.rootPath)} type="button">Use Kit</button>
+                <button className="secondary-button compact-button" onClick={() => onPackageKit(result.rootPath)} type="button">Package/Export</button>
+                <button className="secondary-button compact-button" onClick={() => onValidateKit(result.rootPath)} type="button">Validate</button>
+                <button className="secondary-button compact-button" onClick={onOpenFolder} type="button">Open Folder</button>
+              </div>
+              <details className="advanced-details">
+                <summary>Advanced: draft JSON and full path</summary>
+                <dl className="report-meta">
+                  <div><dt>Full folder path</dt><dd>{result.rootPath}</dd></div>
+                </dl>
+                <pre className="json-panel">{JSON.stringify(buildGuidedAgentKitDraft(form), null, 2)}</pre>
+              </details>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GuidedReviewSummary({ form }: { form: GuidedBuilderState }) {
+  return (
+    <dl className="report-meta run-meta">
+      <div><dt>Kit name</dt><dd>{form.name || "Untitled kit"}</dd></div>
+      <div><dt>Domain</dt><dd>{form.domain || "Not selected"}</dd></div>
+      <div><dt>Target users</dt><dd>{form.targetUsers || "Not specified"}</dd></div>
+      <div><dt>Skills</dt><dd>{form.skills.length}</dd></div>
+      <div><dt>Guardrails</dt><dd>{form.guardrails.filter((item) => item.text.trim()).length}</dd></div>
+      <div><dt>Required inputs</dt><dd>{form.requiredInputs.length}</dd></div>
+      <div><dt>Examples</dt><dd>{form.examples.filter((example) => example.prompt.trim()).length}</dd></div>
+      <div><dt>Validation target</dt><dd>{guidedDefaultValidationProfile(form)}</dd></div>
+      <div><dt>Save location</dt><dd>{friendlyLocation(guidedTargetOutputFolder(form))}</dd></div>
+      <div><dt>Download behavior</dt><dd>{form.documentLike ? `Document-like output, suggested name ${form.downloadFileName || "kit-output"}` : "Standard response output"}</dd></div>
+    </dl>
   );
 }
 
@@ -1584,14 +2543,24 @@ function ValidateScreen({
 
 function UseScreen({
   currentKitPath,
+  onKitPathChange,
   settings,
 }: {
   currentKitPath: string;
+  onKitPathChange: (path: string) => void;
   settings: PublicSettings;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
   const [userTask, setUserTask] = useState("");
   const [additionalContext, setAdditionalContext] = useState("");
+  const [requiredInputs, setRequiredInputs] = useState<RequiredInputFields>({
+    audience: "",
+    timeframe: "",
+    environment: "",
+    fileNotes: "",
+    other: "",
+  });
+  const [providerId, setProviderId] = useState(settings.defaultAiProviderId || "");
   const [model, setModel] = useState(settings.defaultModel || defaultRuntimeModel);
   const [maxOutputLength, setMaxOutputLength] = useState("1800");
   const [contextMode, setContextMode] = useState<AgentKitContextMode>(settings.preferredContextMode);
@@ -1612,6 +2581,7 @@ function UseScreen({
   const [savedResponsePath, setSavedResponsePath] = useState<string | null>(null);
   const [runFieldErrors, setRunFieldErrors] = useState<{
     apiKey?: string;
+    providerId?: string;
     kitPath?: string;
     userTask?: string;
   }>({});
@@ -1633,7 +2603,9 @@ function UseScreen({
   }, [currentKitPath]);
 
   useEffect(() => {
-    setModel(settings.defaultModel || defaultRuntimeModel);
+    const provider = getSelectedProvider(settings, providerId);
+    setProviderId((current) => current || settings.defaultAiProviderId || "");
+    setModel((current) => current || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel);
     setContextMode(settings.preferredContextMode);
     setValidationProfile(settings.preferredValidationProfile);
     setIncludePolicies(settings.includePolicies);
@@ -1686,6 +2658,7 @@ function UseScreen({
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setKitPath(selectedPath);
+        onKitPathChange(selectedPath);
         setResult(null);
         setRunResult(null);
         setFieldErrors((current) => ({ ...current, kitPath: undefined }));
@@ -1701,7 +2674,7 @@ function UseScreen({
   }
 
   async function runInsideForge() {
-    const validationErrors = validateRunForm(settings, kitPath, userTask);
+    const validationErrors = validateRunForm(settings, providerId, kitPath, userTask);
     setRunFieldErrors(validationErrors);
     setRunError(null);
     setRunResult(null);
@@ -1732,11 +2705,12 @@ function UseScreen({
         }
       }
 
-      const runtimeResult = await invoke<RunAgentKitResult>("run_agent_kit_with_openai", {
+      const runtimeResult = await invoke<RunAgentKitResult>("run_agent_kit_with_ai", {
         input: {
           kitPath,
           userTask,
-          additionalContext,
+          additionalContext: combineAdditionalContext(requiredInputs, additionalContext),
+          providerId,
           model,
           maxOutputLength: Number.parseInt(maxOutputLength, 10) || undefined,
           contextMode,
@@ -1878,6 +2852,34 @@ function UseScreen({
     }
   }
 
+  async function saveRunResultText() {
+    if (!runResult?.response) {
+      return;
+    }
+
+    setIsSavingResponse(true);
+    setRunError(null);
+
+    try {
+      const selectedPath = await invoke<string | null>("select_forge_response_text_output_path");
+      if (!selectedPath) {
+        return;
+      }
+
+      const saveResult = await invoke<{ filePath: string }>("save_markdown_file", {
+        input: {
+          content: runResult.response,
+        },
+        outputPath: selectedPath,
+      });
+      setSavedResponsePath(saveResult.filePath);
+    } catch (caughtError) {
+      setRunError(errorToMessage(caughtError));
+    } finally {
+      setIsSavingResponse(false);
+    }
+  }
+
   function clearRunResult() {
     setRunResult(null);
     setRunCompletedAt(null);
@@ -1893,8 +2895,8 @@ function UseScreen({
         <div className="form-panel">
           <h2>Use inside Forge</h2>
 
-          {!settings.hasOpenaiApiKey && (
-            <div className="inline-warning">Add an OpenAI API key in Settings before running.</div>
+          {settings.aiProviders.length === 0 && (
+            <div className="inline-warning">Add an AI provider in Settings before running.</div>
           )}
 
           <label htmlFor="runtime-kit">Select kit folder</label>
@@ -1902,7 +2904,9 @@ function UseScreen({
             <input
               id="runtime-kit"
               onChange={(event) => {
-                setKitPath(event.target.value);
+                const nextPath = event.target.value;
+                setKitPath(nextPath);
+                onKitPathChange(nextPath);
                 setRunResult(null);
                 setResult(null);
               }}
@@ -1922,7 +2926,36 @@ function UseScreen({
           <FieldError message={runFieldErrors.kitPath} />
           <FieldError message={runFieldErrors.apiKey} />
 
-          <label htmlFor="runtime-task">Task</label>
+          <LabelWithHelp
+            htmlFor="runtime-provider"
+            label="AI provider"
+            help="Choose the saved AI provider that will answer using this kit."
+          />
+          <select
+            id="runtime-provider"
+            onChange={(event) => {
+              const provider = settings.aiProviders.find((item) => item.id === event.target.value);
+              setProviderId(event.target.value);
+              setModel(provider?.defaultModel || model);
+              setRunResult(null);
+              setRunError(null);
+            }}
+            value={providerId}
+          >
+            <option value="">Select provider</option>
+            {settings.aiProviders.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name} ({provider.providerType})
+              </option>
+            ))}
+          </select>
+          <FieldError message={runFieldErrors.providerId} />
+
+          <LabelWithHelp
+            htmlFor="runtime-task"
+            label="Task"
+            help="Describe what you need. The kit instructions and the details below will be included before sending."
+          />
           <textarea
             id="runtime-task"
             onChange={(event) => {
@@ -1941,6 +2974,59 @@ function UseScreen({
             isLoading={isLoadingStarterHint}
           />
 
+          <div className="required-inputs-panel">
+            <div className="panel-heading">
+              <h3>Additional required inputs</h3>
+              <HelpTip text="Some kits need details such as audience, time period, project, or source-file notes. Add those here before running." />
+            </div>
+            <div className="settings-grid two-column">
+              <div>
+                <label htmlFor="required-audience">Audience</label>
+                <input
+                  id="required-audience"
+                  onChange={(event) => setRequiredInputs((current) => ({ ...current, audience: event.target.value }))}
+                  placeholder="Who is this for?"
+                  value={requiredInputs.audience}
+                />
+              </div>
+              <div>
+                <label htmlFor="required-timeframe">Reporting period or timeframe</label>
+                <input
+                  id="required-timeframe"
+                  onChange={(event) => setRequiredInputs((current) => ({ ...current, timeframe: event.target.value }))}
+                  placeholder="Q2, this month, launch week..."
+                  value={requiredInputs.timeframe}
+                />
+              </div>
+              <div>
+                <label htmlFor="required-environment">Project, environment, or account</label>
+                <input
+                  id="required-environment"
+                  onChange={(event) => setRequiredInputs((current) => ({ ...current, environment: event.target.value }))}
+                  placeholder="Project name, namespace, account type..."
+                  value={requiredInputs.environment}
+                />
+              </div>
+              <div>
+                <label htmlFor="required-file-notes">Files or source material</label>
+                <input
+                  id="required-file-notes"
+                  onChange={(event) => setRequiredInputs((current) => ({ ...current, fileNotes: event.target.value }))}
+                  placeholder="Describe files for now; upload support comes later."
+                  value={requiredInputs.fileNotes}
+                />
+              </div>
+            </div>
+            <label htmlFor="required-other">Other inputs</label>
+            <textarea
+              id="required-other"
+              onChange={(event) => setRequiredInputs((current) => ({ ...current, other: event.target.value }))}
+              placeholder="Any other required facts, assumptions, or constraints."
+              rows={3}
+              value={requiredInputs.other}
+            />
+          </div>
+
           <label htmlFor="runtime-context">Additional context</label>
           <textarea
             id="runtime-context"
@@ -1953,13 +3039,20 @@ function UseScreen({
             value={additionalContext}
           />
 
-          <label htmlFor="runtime-model">Model</label>
-          <input
+          <LabelWithHelp
+            htmlFor="runtime-model"
+            label="Model"
+            help="Use the provider default, choose a suggestion, or enter a custom model ID."
+          />
+          <ModelInput
             id="runtime-model"
-            onChange={(event) => setModel(event.target.value)}
-            value={model}
+            model={model}
+            onModelChange={setModel}
+            providerType={getSelectedProvider(settings, providerId)?.providerType}
           />
 
+          <details className="advanced-details">
+            <summary>Advanced Settings</summary>
           <div className="settings-grid two-column">
             <div>
               <label htmlFor="runtime-context-mode">Context mode</label>
@@ -2075,6 +3168,13 @@ function UseScreen({
             type="number"
             value={maxOutputLength}
           />
+          </details>
+
+          <PromptPreview
+            additionalContext={additionalContext}
+            requiredInputs={requiredInputs}
+            userTask={userTask}
+          />
 
           <button
             className="primary-button"
@@ -2083,7 +3183,7 @@ function UseScreen({
             type="button"
           >
             <PlayCircle size={18} />
-            {isRunning ? "Running" : "Run with OpenAI"}
+            {isRunning ? "Running" : "Run with AI"}
           </button>
         </div>
 
@@ -2097,6 +3197,7 @@ function UseScreen({
             onCopyResult={copyRunResult}
             onClearResult={clearRunResult}
             onSaveResult={saveRunResult}
+            onSaveResultText={saveRunResultText}
             preRunValidationReport={preRunValidationReport}
             result={runResult}
             runCompletedAt={runCompletedAt}
@@ -2117,7 +3218,9 @@ function UseScreen({
             <input
               id="use-kit"
               onChange={(event) => {
-                setKitPath(event.target.value);
+                const nextPath = event.target.value;
+                setKitPath(nextPath);
+                onKitPathChange(nextPath);
                 setResult(null);
               }}
               placeholder="Choose an Agent Kit"
@@ -2195,10 +3298,12 @@ function UseScreen({
 
 function PackageExportScreen({
   currentKitPath,
+  onKitPathChange,
   onKitPackaged,
   settings,
 }: {
   currentKitPath: string;
+  onKitPathChange: (path: string) => void;
   onKitPackaged: (path: string) => void;
   settings: PublicSettings;
 }) {
@@ -2235,6 +3340,7 @@ function PackageExportScreen({
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setKitPath(selectedPath);
+        onKitPathChange(selectedPath);
         setValidationReport(null);
         setFieldErrors((current) => ({ ...current, kitPath: undefined }));
       }
@@ -2369,7 +3475,9 @@ function PackageExportScreen({
           <input
             id="package-kit-folder"
             onChange={(event) => {
-              setKitPath(event.target.value);
+              const nextPath = event.target.value;
+              setKitPath(nextPath);
+              onKitPathChange(nextPath);
               setValidationReport(null);
             }}
             placeholder="Choose an Agent Kit"
@@ -2469,7 +3577,13 @@ function PackageExportScreen({
   );
 }
 
-function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
+function InstallTargetsScreen({
+  currentKitPath,
+  onKitPathChange,
+}: {
+  currentKitPath: string;
+  onKitPathChange: (path: string) => void;
+}) {
   const [kitPath, setKitPath] = useState(currentKitPath);
   const [destinationSkillsDir, setDestinationSkillsDir] = useState("");
   const [force, setForce] = useState(false);
@@ -2501,6 +3615,7 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
         setKitPath(selectedPath);
+        onKitPathChange(selectedPath);
         setResult(null);
         setClaudeResult(null);
       }
@@ -2649,7 +3764,9 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
             <input
               id="codex-kit-folder"
               onChange={(event) => {
-                setKitPath(event.target.value);
+                const nextPath = event.target.value;
+                setKitPath(nextPath);
+                onKitPathChange(nextPath);
                 setResult(null);
                 setClaudeResult(null);
               }}
@@ -2724,7 +3841,9 @@ function InstallTargetsScreen({ currentKitPath }: { currentKitPath: string }) {
             <input
               id="claude-kit-folder"
               onChange={(event) => {
-                setKitPath(event.target.value);
+                const nextPath = event.target.value;
+                setKitPath(nextPath);
+                onKitPathChange(nextPath);
                 setResult(null);
                 setClaudeResult(null);
               }}
@@ -3029,6 +4148,7 @@ function ForgeRunResults({
   onCopyResult,
   onClearResult,
   onSaveResult,
+  onSaveResultText,
   preRunValidationReport,
   result,
   runCompletedAt,
@@ -3044,6 +4164,7 @@ function ForgeRunResults({
   onCopyResult: () => void;
   onClearResult: () => void;
   onSaveResult: () => void;
+  onSaveResultText: () => void;
   preRunValidationReport: ValidationReport | null;
   result: RunAgentKitResult | null;
   runCompletedAt: string | null;
@@ -3082,7 +4203,7 @@ function ForgeRunResults({
     <div className="forge-result">
       <div className="status-banner valid">
         <strong>Complete</strong>
-        <span>{result.model}</span>
+        <span>{result.providerName} · {result.model}</span>
       </div>
 
       <div className="panel-heading">
@@ -3097,7 +4218,15 @@ function ForgeRunResults({
             onClick={onSaveResult}
             type="button"
           >
-            {isSavingResponse ? "Saving" : "Save Markdown"}
+            {isSavingResponse ? "Saving" : "Download as Markdown"}
+          </button>
+          <button
+            className="secondary-button compact-button"
+            disabled={isSavingResponse}
+            onClick={onSaveResultText}
+            type="button"
+          >
+            Download as Text
           </button>
           <button className="secondary-button compact-button" onClick={onClearResult} type="button">
             Clear
@@ -3168,6 +4297,9 @@ function StarterHintPanel({
   hint: AgentKitStarterHint | null;
   isLoading: boolean;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
   if (isLoading) {
     return <p className="state-copy compact-state">Checking for starter guidance...</p>;
   }
@@ -3180,10 +4312,34 @@ function StarterHintPanel({
     return null;
   }
 
+  async function copyHint() {
+    if (!hint) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(hint.excerpt);
+      setCopyState("copied");
+    } catch {
+      setCopyState("failed");
+    }
+  }
+
   return (
     <div className="starter-hint-panel">
-      <strong>Starter hint from {hint.sourceFile}</strong>
-      <p>{hint.excerpt}</p>
+      <div className="panel-heading">
+        <strong>Starter hint from {hint.sourceFile}</strong>
+        <div className="button-row">
+          <button className="secondary-button compact-button" onClick={copyHint} type="button">
+            Copy
+          </button>
+          <button className="secondary-button compact-button" onClick={() => setIsExpanded((current) => !current)} type="button">
+            {isExpanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
+      </div>
+      <div className={`starter-hint-copy ${isExpanded ? "expanded" : ""}`}>{hint.excerpt}</div>
+      {copyState === "copied" && <div className="copy-state">Starter hint copied.</div>}
+      {copyState === "failed" && <div className="field-error">Clipboard access failed.</div>}
     </div>
   );
 }
@@ -3206,6 +4362,10 @@ function RunMetadata({
       <div>
         <dt>Kit</dt>
         <dd>{result.kitName || selectedKitPath || "Selected kit"}</dd>
+      </div>
+      <div>
+        <dt>Provider</dt>
+        <dd>{result.providerName}</dd>
       </div>
       <div>
         <dt>Model</dt>
@@ -3239,6 +4399,77 @@ function RunMetadata({
   );
 }
 
+function PromptPreview({
+  additionalContext,
+  requiredInputs,
+  userTask,
+}: {
+  additionalContext: string;
+  requiredInputs: RequiredInputFields;
+  userTask: string;
+}) {
+  const preview = buildPlannedPrompt(userTask, requiredInputs, additionalContext);
+  return (
+    <details className="context-details prompt-preview">
+      <summary>Prompt preview</summary>
+      <p className="form-copy">
+        This is the user-facing request AgentKitForge will combine with the selected kit context.
+      </p>
+      <pre className="json-panel">{preview || "Add a task to preview the planned prompt."}</pre>
+    </details>
+  );
+}
+
+function combineAdditionalContext(requiredInputs: RequiredInputFields, additionalContext: string) {
+  return [formatRequiredInputs(requiredInputs), additionalContext.trim()]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildPlannedPrompt(
+  userTask: string,
+  requiredInputs: RequiredInputFields,
+  additionalContext: string,
+) {
+  return [
+    userTask.trim() ? `Main task:\n${userTask.trim()}` : "",
+    formatRequiredInputs(requiredInputs),
+    additionalContext.trim() ? `Additional context:\n${additionalContext.trim()}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatRequiredInputs(requiredInputs: RequiredInputFields) {
+  const rows = [
+    ["Audience", requiredInputs.audience],
+    ["Reporting period or timeframe", requiredInputs.timeframe],
+    ["Project, environment, or account", requiredInputs.environment],
+    ["Files or source material", requiredInputs.fileNotes],
+    ["Other inputs", requiredInputs.other],
+  ].filter(([, value]) => value.trim() !== "");
+
+  if (rows.length === 0) {
+    return "";
+  }
+
+  return `Additional required inputs:\n${rows
+    .map(([label, value]) => `- ${label}: ${value.trim()}`)
+    .join("\n")}`;
+}
+
+function friendlyFileName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+function friendlyLocation(path: string) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 1) {
+    return path;
+  }
+  return `${parts[parts.length - 2]} / ${parts[parts.length - 1]}`;
+}
+
 function OneFileExportResults({
   copyState,
   error,
@@ -3268,7 +4499,8 @@ function OneFileExportResults({
     return (
       <p className="state-copy">
         Export a selected kit into one Markdown file for use with ChatGPT, Claude, or another web
-        assistant.
+        assistant. If you choose a folder, AgentKitForge uses the default name
+        <span className="inline-code"> &lt;kit-id&gt;-&lt;version&gt;.onefile.md</span>.
       </p>
     );
   }
@@ -3283,9 +4515,18 @@ function OneFileExportResults({
       <dl className="report-meta">
         <div>
           <dt>Generated file</dt>
-          <dd>{result.filePath}</dd>
+          <dd>{friendlyFileName(result.filePath)}</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Advanced details</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Full path</dt>
+            <dd>{result.filePath}</dd>
+          </div>
+        </dl>
+      </details>
 
       <div className="starter-prompt-panel">
         <div className="panel-heading">
@@ -3392,11 +4633,15 @@ function formatTimestamp(value?: string) {
   return new Date(numeric * 1000).toLocaleString();
 }
 
-function validateRunForm(settings: PublicSettings, kitPath: string, userTask: string) {
-  const errors: { apiKey?: string; kitPath?: string; userTask?: string } = {};
+function validateRunForm(settings: PublicSettings, providerId: string, kitPath: string, userTask: string) {
+  const errors: { apiKey?: string; providerId?: string; kitPath?: string; userTask?: string } = {};
 
-  if (!settings.hasOpenaiApiKey) {
-    errors.apiKey = "OpenAI API key is required. Save it in Settings first.";
+  if (settings.aiProviders.length === 0) {
+    errors.apiKey = "AI provider is required. Add one in Settings first.";
+  }
+
+  if (providerId.trim() === "") {
+    errors.providerId = "AI provider is required.";
   }
 
   if (kitPath.trim() === "") {
@@ -3408,6 +4653,327 @@ function validateRunForm(settings: PublicSettings, kitPath: string, userTask: st
   }
 
   return errors;
+}
+
+function createDefaultGuidedBuilderState(outputFolder: string): GuidedBuilderState {
+  return {
+    name: "",
+    id: "",
+    description: "",
+    domain: "",
+    targetUsers: "",
+    validationLevel: "local-valid",
+    outputFolder,
+    skills: [createDefaultGuidedSkill(1)],
+    guardrails: [],
+    outputSections: "Summary\nKey findings\nRecommended next steps",
+    outputTemplate: "",
+    documentLike: true,
+    downloadFileName: "agent-kit-output",
+    summaryStyle: "Clear, practical, and user-facing",
+    requiredInputs: [createDefaultRequiredInput(1)],
+    examples: [createDefaultExample(1)],
+    force: false,
+  };
+}
+
+function createDefaultGuidedSkill(index: number): GuidedSkill {
+  return {
+    id: `skill-${index}`,
+    name: "",
+    description: "",
+    triggers: "",
+    useWhen: "",
+    doNotUseWhen: "",
+    inputs: "",
+    procedure: "",
+    output: "",
+    riskLevel: "low",
+  };
+}
+
+function createDefaultRequiredInput(index: number): GuidedRequiredInput {
+  return {
+    id: `input-${index}`,
+    label: "",
+    description: "",
+    required: true,
+    inputType: "short-text",
+    placeholder: "",
+    includeInPrompt: true,
+    choices: "",
+  };
+}
+
+function createDefaultExample(index: number): GuidedExample {
+  return {
+    id: `example-${index}`,
+    prompt: "",
+    requiredInputExamples: "",
+    output: "",
+  };
+}
+
+function validateGuidedBuilder(form: GuidedBuilderState) {
+  if (!form.name.trim()) {
+    return "Kit name is required.";
+  }
+  if (!form.id.trim()) {
+    return "Kit ID is required.";
+  }
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(form.id.trim())) {
+    return "Kit ID must use lowercase letters, numbers, and hyphens.";
+  }
+  if (!form.description.trim()) {
+    return "Description is required.";
+  }
+  if (!form.outputFolder.trim()) {
+    return "Save location is required.";
+  }
+  const validSkills = form.skills.filter((skill) => skill.name.trim() && skill.description.trim());
+  if (validSkills.length === 0) {
+    return "Add at least one skill with a name and description.";
+  }
+  for (const skill of validSkills) {
+    if (!skill.triggers.trim() || !skill.useWhen.trim() || !skill.procedure.trim() || !skill.output.trim()) {
+      return `Complete triggers, use when, procedure, and output expectations for ${skill.name}.`;
+    }
+  }
+  return null;
+}
+
+function buildGuidedAgentKitDraft(form: GuidedBuilderState) {
+  const requiredInputs = form.requiredInputs
+    .filter((input) => input.label.trim())
+    .map((input) => ({
+      id: input.id || slugify(input.label),
+      label: input.label,
+      description: input.description,
+      required: input.required,
+      inputType: input.inputType,
+      placeholder: input.placeholder,
+      includeInPrompt: input.includeInPrompt,
+      choices: splitLines(input.choices),
+    }));
+  const outputConfig = {
+    documentLike: form.documentLike,
+    suggestedDownloadName: form.downloadFileName,
+    summaryStyle: form.summaryStyle,
+    outputSections: splitLines(form.outputSections),
+  };
+  const guardrails = form.guardrails.map((item) => item.text.trim()).filter(Boolean);
+  const skills = form.skills
+    .filter((skill) => skill.name.trim() && skill.description.trim())
+    .map((skill, index) => ({
+      id: skill.id || slugify(skill.name) || `skill-${index + 1}`,
+      name: skill.name.trim(),
+      description: skill.description.trim(),
+      triggers: splitLines(skill.triggers).length > 0 ? splitLines(skill.triggers) : [skill.name.trim()],
+      riskLevel: skill.riskLevel || "low",
+      useWhen: withOptionalSections(skill.useWhen, [
+        ["Do not use when", skill.doNotUseWhen],
+        ["Inputs", skill.inputs],
+      ]),
+      procedure: skill.procedure.trim(),
+      output: withOptionalSections(skill.output, [
+        ["Expected output sections", form.outputSections],
+        ["Output template", form.outputTemplate],
+      ]),
+    }));
+  const examples = form.examples
+    .filter((example) => example.prompt.trim())
+    .map((example, index) => ({
+      id: example.id || `example-${index + 1}`,
+      prompt: withOptionalSections(example.prompt, [["Required input examples", example.requiredInputExamples]]),
+      output: example.output.trim() || undefined,
+    }));
+  const policies = guardrails.length > 0 ? [{ id: "guardrails", description: "Guided Builder guardrails", rules: guardrails }] : [];
+  const templates = [
+    {
+      id: "agentkitforge-required-inputs",
+      path: "agentkitforge/required-inputs.json",
+      content: JSON.stringify({ requiredInputs, outputConfig }, null, 2),
+    },
+  ];
+
+  if (form.outputTemplate.trim()) {
+    templates.push({
+      id: "output-template",
+      path: "output-template.md",
+      content: form.outputTemplate,
+    });
+  }
+
+  return {
+    schemaVersion: "0.1",
+    id: form.id,
+    name: form.name,
+    version: "0.1.0",
+    description: form.description,
+    author: { name: "AgentKitForge Guided Builder" },
+    license: "MIT",
+    setupLevel: "low",
+    compatibilityTargets: ["codex", "chatgpt", "claude"],
+    riskLevel: highestRiskLevel(skills.map((skill) => skill.riskLevel)),
+    agentInstructions: renderGuidedAgentInstructions(form, guardrails, requiredInputs),
+    startHere: renderGuidedStartHere(form, requiredInputs),
+    readme: renderGuidedReadme(form, requiredInputs),
+    changelog: "# Changelog\n\n## 0.1.0\n\nInitial Guided Builder kit.\n",
+    skills,
+    policies,
+    examples,
+    templates,
+  };
+}
+
+function renderGuidedAgentInstructions(
+  form: GuidedBuilderState,
+  guardrails: string[],
+  requiredInputs: Array<{ label: string; description: string; required: boolean; includeInPrompt: boolean }>,
+) {
+  return `# ${form.name}
+
+${form.description}
+
+## Domain
+
+${form.domain || "General"}
+
+## Target users
+
+${form.targetUsers || "General users"}
+
+## Required inputs
+
+${requiredInputs.length > 0 ? requiredInputs.map((input) => `- ${input.label}${input.required ? " (required)" : " (optional)"}: ${input.description || "User-provided context."}`).join("\n") : "- Ask clarifying questions if important details are missing."}
+
+## Guardrails
+
+${guardrails.length > 0 ? guardrails.map((guardrail) => `- ${guardrail}`).join("\n") : "- Flag uncertainty and avoid unsupported claims."}
+
+## Output behavior
+
+- Summary style: ${form.summaryStyle || "Clear and practical"}.
+- Document-like output: ${form.documentLike ? "yes" : "no"}.
+- Suggested downloadable output name: ${form.downloadFileName || `${form.id}-output`}.
+`;
+}
+
+function renderGuidedStartHere(form: GuidedBuilderState, requiredInputs: Array<{ label: string; required: boolean }>) {
+  return `# ${form.name}
+
+${form.description}
+
+Use this kit for ${form.domain || "general business"} work with ${form.targetUsers || "the intended users"}.
+
+Before running, collect:
+
+${requiredInputs.length > 0 ? requiredInputs.map((input) => `- ${input.label}${input.required ? " (required)" : " (optional)"}`).join("\n") : "- The user's task and any relevant context."}
+`;
+}
+
+function renderGuidedReadme(form: GuidedBuilderState, requiredInputs: Array<{ label: string; description: string; required: boolean }>) {
+  return `# ${form.name}
+
+${form.description}
+
+## Domain
+
+${form.domain || "General"}
+
+## Target users
+
+${form.targetUsers || "General users"}
+
+## Required inputs
+
+${requiredInputs.length > 0 ? requiredInputs.map((input) => `- **${input.label}**${input.required ? " (required)" : " (optional)"}: ${input.description || "User-provided context."}`).join("\n") : "No additional required inputs were defined."}
+
+## Output style
+
+${form.summaryStyle || "Clear and practical"}
+`;
+}
+
+function guidedDefaultValidationProfile(form: GuidedBuilderState): ValidationProfile {
+  if (form.guardrails.some((guardrail) => guardrail.text.trim()) && form.examples.some((example) => example.prompt.trim())) {
+    return "trusted";
+  }
+  return form.validationLevel === "verified" ? "trusted" : form.validationLevel;
+}
+
+function guidedTargetOutputFolder(form: GuidedBuilderState) {
+  const root = form.outputFolder.trim();
+  const folderName = form.id.trim() || slugify(form.name) || "agent-kit";
+  if (!root) {
+    return folderName;
+  }
+  if (root.endsWith("\\") || root.endsWith("/")) {
+    return `${root}${folderName}`;
+  }
+  return `${root}${root.includes("\\") ? "\\" : "/"}${folderName}`;
+}
+
+function guardrailPresetForDomain(domain: string) {
+  const normalized = domain.toLowerCase();
+  if (normalized.includes("finance") || normalized.includes("accounting")) {
+    return "Do not provide tax, legal, audit, or assurance guarantees. Require qualified human review before decisions are made.";
+  }
+  if (normalized.includes("legal")) {
+    return "Do not provide legal advice. Require attorney review before relying on legal conclusions.";
+  }
+  if (normalized.includes("health") || normalized.includes("medical")) {
+    return "Do not provide medical advice. Require clinician review before relying on medical or patient-facing conclusions.";
+  }
+  if (normalized.includes("devops") || normalized.includes("sre")) {
+    return "Operate read-only by default. Require explicit approval before destructive, production, or irreversible actions.";
+  }
+  if (normalized.includes("security")) {
+    return "Only assist authorized work. Do not execute or facilitate exploit activity without clear permission and scope.";
+  }
+  if (normalized.includes("compliance")) {
+    return "Require human review and do not claim certification, compliance status, or audit readiness without evidence.";
+  }
+  if (normalized.includes("hr") || normalized.includes("recruiting")) {
+    return "Avoid discriminatory screening or protected-class inferences. Require human review for employment decisions.";
+  }
+  return "Flag uncertainty, cite assumptions, and avoid unsupported claims.";
+}
+
+function slugify(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function withOptionalSections(base: string, sections: Array<[string, string]>) {
+  const content = [base.trim()];
+  for (const [title, value] of sections) {
+    if (value.trim()) {
+      content.push(`## ${title}\n\n${value.trim()}`);
+    }
+  }
+  return content.filter(Boolean).join("\n\n");
+}
+
+function highestRiskLevel(values: string[]) {
+  if (values.includes("high")) {
+    return "high";
+  }
+  if (values.includes("medium")) {
+    return "medium";
+  }
+  return "low";
 }
 
 function formatRunResultMarkdown(
@@ -3439,6 +5005,7 @@ function formatRunResultMarkdown(
 - Kit: ${result.kitName || kitPath || "Selected kit"}
 - Kit path: ${kitPath || "Unknown"}
 - Model: ${result.model}
+- Provider: ${result.providerName}
 - Context mode: ${contextMode}
 - Validation: ${validateBeforeRun ? validationProfile : "Skipped"}
 - Timestamp: ${timestamp}
@@ -3460,6 +5027,160 @@ ${files}
 
 ${warnings}
 `;
+}
+
+function ModelInput({
+  id,
+  model,
+  onModelChange,
+  providerType,
+}: {
+  id: string;
+  model: string;
+  onModelChange: (value: string) => void;
+  providerType?: AiProviderType;
+}) {
+  const models = providerType ? getKnownModelsForProvider(providerType) : [];
+  return (
+    <div className="model-input">
+      {models.length > 0 && (
+        <select
+          aria-label="Known model suggestions"
+          onChange={(event) => {
+            if (event.target.value) {
+              onModelChange(event.target.value);
+            }
+          }}
+          value={models.some((knownModel) => knownModel.id === model) ? model : ""}
+        >
+          <option value="">Custom model ID</option>
+          {models.map((knownModel) => (
+            <option key={knownModel.id} value={knownModel.id}>
+              {knownModel.label}
+            </option>
+          ))}
+        </select>
+      )}
+      <input
+        id={id}
+        onChange={(event) => onModelChange(event.target.value)}
+        placeholder={providerType === "openai-compatible" ? "Enter model ID" : "Model ID"}
+        value={model}
+      />
+    </div>
+  );
+}
+
+function LabelWithHelp({
+  help,
+  htmlFor,
+  label,
+}: {
+  help: string;
+  htmlFor: string;
+  label: string;
+}) {
+  return (
+    <label className="label-with-help" htmlFor={htmlFor}>
+      <span>{label}</span>
+      <HelpTip text={help} />
+    </label>
+  );
+}
+
+function HelpTip({ text }: { text: string }) {
+  return (
+    <span className="help-tip" tabIndex={0}>
+      ?
+      <span className="help-tip-content">{text}</span>
+    </span>
+  );
+}
+
+function DomainSelector({
+  id,
+  onChange,
+  value,
+}: {
+  id: string;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const matches = knownDomains
+    .filter((domain) => domain.toLowerCase().includes(value.trim().toLowerCase()))
+    .slice(0, 8);
+  const suggestions = value.trim() === "" ? knownDomains.slice(0, 8) : matches;
+
+  return (
+    <div className="domain-selector">
+      <input
+        id={id}
+        list={`${id}-suggestions`}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Start typing, for example Finance or Customer Support"
+        value={value}
+      />
+      <datalist id={`${id}-suggestions`}>
+        {[...suggestions, "Other / Custom"].map((domain) => (
+          <option key={domain} value={domain} />
+        ))}
+      </datalist>
+    </div>
+  );
+}
+
+function getSelectedProvider(settings: PublicSettings, providerId?: string) {
+  return (
+    settings.aiProviders.find((provider) => provider.id === providerId) ??
+    settings.aiProviders.find((provider) => provider.id === settings.defaultAiProviderId) ??
+    settings.aiProviders[0]
+  );
+}
+
+function selectedProviderSupportsStructuredJson(provider: AiProviderConfig | undefined, modelId?: string) {
+  if (!provider) {
+    return false;
+  }
+
+  return providerSupportsStructuredJson(
+    provider.providerType,
+    modelId || provider.defaultModel,
+    provider.supportsStructuredJson,
+  );
+}
+
+function defaultProviderForm(settings: PublicSettings): AiProviderForm {
+  return {
+    name: "OpenAI",
+    providerType: "openai",
+    baseUrl: defaultBaseUrl("openai"),
+    apiKey: "",
+    defaultModel: settings.defaultModel || defaultRuntimeModel,
+    supportsStructuredJson: providerSupportsStructuredJson("openai", settings.defaultModel || defaultRuntimeModel),
+  };
+}
+
+function defaultProviderName(providerType: AiProviderType) {
+  switch (providerType) {
+    case "openai":
+      return "OpenAI";
+    case "anthropic":
+      return "Anthropic";
+    case "gemini":
+      return "Google Gemini";
+    case "ollama":
+      return "Ollama";
+    case "openai-compatible":
+      return "Custom OpenAI-compatible";
+  }
+}
+
+function defaultBaseUrl(providerType: AiProviderType) {
+  return normalizeBaseUrl(providerType) ?? "";
+}
+
+function defaultModelForProvider(providerType: AiProviderType) {
+  return getDefaultModelForProvider(providerType) ?? "";
 }
 
 function SettingsScreen({
@@ -3485,6 +5206,7 @@ function SettingsScreen({
   const [preferredContextMode, setPreferredContextMode] = useState<AgentKitContextMode>(
     settings.preferredContextMode,
   );
+  const [theme, setTheme] = useState<ThemeMode>(settings.theme);
   const [includePolicies, setIncludePolicies] = useState(settings.includePolicies);
   const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
   const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
@@ -3492,17 +5214,94 @@ function SettingsScreen({
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
   const [isSelectingOutputFolder, setIsSelectingOutputFolder] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [providerForm, setProviderForm] = useState<AiProviderForm>(() => defaultProviderForm(settings));
 
   useEffect(() => {
     setDefaultModel(settings.defaultModel);
     setDefaultOutputFolder(settings.defaultOutputFolder);
     setPreferredValidationProfile(settings.preferredValidationProfile);
     setPreferredContextMode(settings.preferredContextMode);
+    setTheme(settings.theme);
     setIncludePolicies(settings.includePolicies);
     setIncludeTemplates(settings.includeTemplates);
     setIncludeWorkflows(settings.includeWorkflows);
     setIncludeReferences(settings.includeReferences);
   }, [settings]);
+
+  function editProvider(provider: AiProviderConfig) {
+    setProviderForm({
+      id: provider.id,
+      name: provider.name,
+      providerType: provider.providerType,
+      baseUrl: provider.baseUrl || defaultBaseUrl(provider.providerType),
+      apiKey: "",
+      defaultModel: provider.defaultModel,
+      supportsStructuredJson: provider.supportsStructuredJson,
+    });
+    setSettingsError(null);
+    setSettingsMessage(null);
+  }
+
+  function updateProviderType(providerType: AiProviderType) {
+    const nextModel = defaultModelForProvider(providerType);
+    setProviderForm((current) => ({
+      ...current,
+      providerType,
+      name: current.id ? current.name : defaultProviderName(providerType),
+      baseUrl: current.id ? current.baseUrl : defaultBaseUrl(providerType),
+      defaultModel: current.id ? current.defaultModel : nextModel,
+      supportsStructuredJson: providerSupportsStructuredJson(
+        providerType,
+        current.id ? current.defaultModel : nextModel,
+      ),
+    }));
+  }
+
+  async function saveProvider() {
+    setSettingsError(null);
+    setSettingsMessage(null);
+    setIsSavingKey(true);
+    try {
+      const normalizedProviderForm = {
+        ...providerForm,
+        baseUrl: normalizeBaseUrl(providerForm.providerType, providerForm.baseUrl) ?? "",
+      };
+      const updatedSettings = await invoke<PublicSettings>("save_ai_provider", {
+        input: normalizedProviderForm,
+      });
+      onSettingsChange(updatedSettings);
+      setProviderForm(defaultProviderForm(updatedSettings));
+      setSettingsMessage("AI provider saved locally.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  async function removeProvider(providerId: string) {
+    setSettingsError(null);
+    setSettingsMessage(null);
+    try {
+      const updatedSettings = await invoke<PublicSettings>("remove_ai_provider", { providerId });
+      onSettingsChange(updatedSettings);
+      setSettingsMessage("AI provider removed.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    }
+  }
+
+  async function setDefaultProvider(providerId: string) {
+    setSettingsError(null);
+    setSettingsMessage(null);
+    try {
+      const updatedSettings = await invoke<PublicSettings>("set_default_ai_provider", { providerId });
+      onSettingsChange(updatedSettings);
+      setSettingsMessage("Default AI provider updated.");
+    } catch (caughtError) {
+      setSettingsError(errorToMessage(caughtError));
+    }
+  }
 
   async function saveApiKey() {
     setIsSavingKey(true);
@@ -3552,6 +5351,7 @@ function SettingsScreen({
           defaultOutputFolder,
           preferredValidationProfile,
           preferredContextMode,
+          theme,
           includePolicies,
           includeTemplates,
           includeWorkflows,
@@ -3592,8 +5392,8 @@ function SettingsScreen({
 
     try {
       const result = await invoke<{ ok: boolean; model: string; message: string }>(
-        "test_openai_connection",
-        { input: { model: defaultModel } },
+        "test_ai_provider_connection",
+        { input: { providerId: providerForm.id || settings.defaultAiProviderId, model: providerForm.defaultModel || defaultModel } },
       );
       setSettingsMessage(`${result.message} Model: ${result.model}.`);
     } catch (caughtError) {
@@ -3605,60 +5405,139 @@ function SettingsScreen({
 
   return (
     <div className="form-panel settings-panel">
-      <div className="settings-status-row">
-        <span className={`secret-status ${settings.hasOpenaiApiKey ? "saved" : ""}`}>
-          {settings.hasOpenaiApiKey ? "API key saved" : "No API key saved"}
-        </span>
+      <h2>AI Providers</h2>
+      {settings.aiProviders.length === 0 && (
+        <div className="inline-warning">
+          Add OpenAI, Anthropic, Gemini, Ollama, or a custom OpenAI-compatible provider.
+        </div>
+      )}
+
+      <div className="provider-list">
+        {settings.aiProviders.map((provider) => (
+          <article className="provider-card" key={provider.id}>
+            <div>
+              <strong>{provider.name}</strong>
+              <p>{provider.providerType} · {provider.defaultModel}</p>
+            </div>
+            <span className={`secret-status ${provider.hasApiKey || provider.providerType === "ollama" ? "saved" : ""}`}>
+              {provider.hasApiKey ? "Key saved" : provider.providerType === "ollama" ? "No key required" : "No key"}
+            </span>
+            <div className="button-row">
+              <button className="secondary-button compact-button" onClick={() => editProvider(provider)} type="button">
+                Edit
+              </button>
+              <button className="secondary-button compact-button" onClick={() => setDefaultProvider(provider.id)} type="button">
+                {settings.defaultAiProviderId === provider.id ? "Default" : "Make default"}
+              </button>
+              <button className="secondary-button compact-button" onClick={() => removeProvider(provider.id)} type="button">
+                Remove
+              </button>
+            </div>
+          </article>
+        ))}
       </div>
 
-      <label htmlFor="openai-api-key">OpenAI API key</label>
+      <h2>{providerForm.id ? "Edit provider" : "Add provider"}</h2>
+      <div className="settings-grid two-column">
+        <div>
+          <label htmlFor="provider-type">Provider type</label>
+          <select
+            id="provider-type"
+            onChange={(event) => updateProviderType(event.target.value as AiProviderType)}
+            value={providerForm.providerType}
+          >
+            {aiProviderTypes.map((providerType) => (
+              <option key={providerType} value={providerType}>
+                {providerType}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="provider-name">Provider name</label>
+          <input
+            id="provider-name"
+            onChange={(event) => setProviderForm((current) => ({ ...current, name: event.target.value }))}
+            value={providerForm.name}
+          />
+        </div>
+      </div>
+
+      <details className="advanced-details">
+        <summary>Advanced provider settings</summary>
+        <LabelWithHelp
+          htmlFor="provider-base-url"
+          label="Base URL"
+          help="Only change this for local servers, gateways, or custom OpenAI-compatible providers."
+        />
+        <input
+          id="provider-base-url"
+          onChange={(event) => setProviderForm((current) => ({ ...current, baseUrl: event.target.value }))}
+          placeholder={isBaseUrlRequiredForProvider(providerForm.providerType) ? "Required" : defaultBaseUrl(providerForm.providerType) || "Optional"}
+          value={providerForm.baseUrl}
+        />
+
+        <label className="checkbox-row" htmlFor="provider-structured-json">
+          <input
+            checked={providerForm.supportsStructuredJson}
+            id="provider-structured-json"
+            onChange={(event) => setProviderForm((current) => ({ ...current, supportsStructuredJson: event.target.checked }))}
+            type="checkbox"
+          />
+          <span>Provider can reliably return structured JSON</span>
+          <HelpTip text="This matters for Build with AI because drafts must be valid JSON before rendering." />
+        </label>
+        {getProviderCapabilities(providerForm.providerType).notes && (
+          <p className="form-copy">{getProviderCapabilities(providerForm.providerType).notes}</p>
+        )}
+      </details>
+
+      <label htmlFor="provider-api-key">API key</label>
       <div className="input-with-icon">
         <KeyRound size={18} />
         <input
-          id="openai-api-key"
-          onChange={(event) => onUpdate("openAiApiKey", event.target.value)}
-          placeholder={settings.hasOpenaiApiKey ? "Saved key is hidden" : "sk-..."}
+          id="provider-api-key"
+          onChange={(event) => setProviderForm((current) => ({ ...current, apiKey: event.target.value }))}
+          placeholder={
+            providerForm.id
+              ? "Saved key is hidden. Enter a new key to update."
+              : isApiKeyRequiredForProvider(providerForm.providerType)
+                ? "Required"
+                : "Optional for local providers"
+          }
           type="password"
-          value={appState.openAiApiKey}
+          value={providerForm.apiKey}
         />
       </div>
+
+      <label htmlFor="provider-model">Default model</label>
+      <ModelInput
+        id="provider-model"
+        model={providerForm.defaultModel}
+        onModelChange={(value) => setProviderForm((current) => ({ ...current, defaultModel: value }))}
+        providerType={providerForm.providerType}
+      />
+
       <div className="button-row">
-        <button
-          className="primary-button"
-          disabled={isSavingKey}
-          onClick={saveApiKey}
-          type="button"
-        >
-          {isSavingKey ? "Saving" : "Save API key"}
+        <button className="primary-button" disabled={isSavingKey} onClick={saveProvider} type="button">
+          {isSavingKey ? "Saving" : "Save provider"}
+        </button>
+        <button className="secondary-button" onClick={() => setProviderForm(defaultProviderForm(settings))} type="button">
+          New provider
         </button>
         <button
           className="secondary-button"
-          disabled={isClearingKey || !settings.hasOpenaiApiKey}
-          onClick={clearApiKey}
+          disabled={isTestingConnection || settings.aiProviders.length === 0}
+          onClick={testOpenAIConnection}
           type="button"
         >
-          {isClearingKey ? "Clearing" : "Clear API key"}
+          {isTestingConnection ? "Testing" : "Test selected provider"}
         </button>
       </div>
-      <button
-        className="secondary-button settings-inline-button"
-        disabled={isTestingConnection || !settings.hasOpenaiApiKey}
-        onClick={testOpenAIConnection}
-        type="button"
-      >
-        {isTestingConnection ? "Testing" : "Test OpenAI connection"}
-      </button>
-
-      <label htmlFor="default-runtime-model">Default OpenAI model</label>
-      <input
-        id="default-runtime-model"
-        onChange={(event) => setDefaultModel(event.target.value)}
-        value={defaultModel}
-      />
 
       <div className="inline-warning">
         Settings are stored as local app data at {settings.settingsPath || "the app-local settings file"}.
-        The OpenAI API key is saved there for v0.1; it is not stored in an OS keychain yet.
+        API keys are saved there for v0.1; they are not stored in an OS keychain yet.
       </div>
 
       {settingsMessage && <div className="copy-state">{settingsMessage}</div>}
@@ -3711,6 +5590,16 @@ function SettingsScreen({
             {mode}
           </option>
         ))}
+      </select>
+
+      <label htmlFor="app-theme">Theme</label>
+      <select
+        id="app-theme"
+        onChange={(event) => setTheme(event.target.value as ThemeMode)}
+        value={theme}
+      >
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
       </select>
 
       <div className="checkbox-grid">
@@ -3812,7 +5701,7 @@ function AboutScreen({ settings }: { settings: PublicSettings }) {
           not require an account and does not sync local library data remotely.
         </p>
         <div className="inline-warning">
-          For v0.1, the OpenAI API key is stored in local app data, not an OS keychain. Do not share
+          For v0.1, AI provider API keys are stored in local app data, not an OS keychain. Do not share
           local app data or commit generated settings files.
         </div>
       </section>
@@ -3858,10 +5747,6 @@ function CreateAgentKitResults({
 
       <dl className="report-meta">
         <div>
-          <dt>Root path</dt>
-          <dd>{result.rootPath}</dd>
-        </div>
-        <div>
           <dt>Template</dt>
           <dd>{result.template}</dd>
         </div>
@@ -3870,6 +5755,15 @@ function CreateAgentKitResults({
           <dd>{validationProfile}</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Advanced details</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Full folder path</dt>
+            <dd>{result.rootPath}</dd>
+          </div>
+        </dl>
+      </details>
 
       <div className="created-files">
         <h3>Created files</h3>
@@ -3928,14 +5822,19 @@ function RenderAgentKitDraftResults({
 
       <dl className="report-meta">
         <div>
-          <dt>Root path</dt>
-          <dd>{result.rootPath}</dd>
-        </div>
-        <div>
           <dt>Validation profile</dt>
           <dd>local-valid</dd>
         </div>
       </dl>
+      <details className="advanced-details">
+        <summary>Advanced details</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Full folder path</dt>
+            <dd>{result.rootPath}</dd>
+          </div>
+        </dl>
+      </details>
 
       <div className="created-files">
         <h3>Created files</h3>
@@ -3998,7 +5897,7 @@ function GeneratedDraftResults({
   savePath: string | null;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Generating AgentKitDraft JSON with OpenAI...</p>;
+    return <p className="state-copy">Generating AgentKitDraft JSON with the selected AI provider...</p>;
   }
 
   if (error) {
@@ -4021,7 +5920,7 @@ function GeneratedDraftResults({
     <div className="generated-draft-result">
       <div className="status-banner valid">
         <strong>Draft generated</strong>
-        <span>{result.model}</span>
+        <span>{result.providerName} · {result.model}</span>
       </div>
 
       {result.warnings.length > 0 && (
@@ -4047,11 +5946,18 @@ function GeneratedDraftResults({
       )}
       {savePath && <div className="copy-state">Saved to {savePath}</div>}
 
-      <pre className="json-panel">{result.draftJsonPretty}</pre>
+      <details className="advanced-details">
+        <summary>Advanced: draft JSON</summary>
+        <pre className="json-panel">{result.draftJsonPretty}</pre>
+      </details>
 
       <div className="render-generated-panel">
         <h3>Render this draft</h3>
-        <label htmlFor="generated-render-output">Target output folder</label>
+        <LabelWithHelp
+          htmlFor="generated-render-output"
+          label="Save location"
+          help="Choose where the rendered kit folder should be created."
+        />
         <div className="path-picker">
           <input
             id="generated-render-output"
@@ -4078,6 +5984,7 @@ function GeneratedDraftResults({
             type="checkbox"
           />
           <span>Force overwrite generated files</span>
+          <HelpTip text="Use this only when you intentionally want generated files to replace existing files." />
         </label>
 
         <button
@@ -4102,12 +6009,15 @@ function GeneratedDraftResults({
               <strong>Rendered</strong>
               <span>{renderResult.files.length} file{renderResult.files.length === 1 ? "" : "s"}</span>
             </div>
-            <dl className="report-meta">
-              <div>
-                <dt>Root path</dt>
-                <dd>{renderResult.rootPath}</dd>
-              </div>
-            </dl>
+            <details className="advanced-details">
+              <summary>Advanced details</summary>
+              <dl className="report-meta">
+                <div>
+                  <dt>Full folder path</dt>
+                  <dd>{renderResult.rootPath}</dd>
+                </div>
+              </dl>
+            </details>
             <button
               className="primary-button"
               onClick={() => onValidateRenderedKit(renderResult.rootPath)}
@@ -4176,8 +6086,12 @@ function validateDraftRenderForm(form: RenderAgentKitDraftInput) {
 function validateGenerateDraftForm(settings: PublicSettings, form: GenerateAgentKitDraftInput) {
   const errors: Partial<Record<keyof GenerateAgentKitDraftInput | "apiKey", string>> = {};
 
-  if (!settings.hasOpenaiApiKey) {
-    errors.apiKey = "OpenAI API key is required. Save it in Settings first.";
+  if (settings.aiProviders.length === 0) {
+    errors.apiKey = "AI provider is required. Add one in Settings first.";
+  }
+
+  if (form.providerId.trim() === "") {
+    errors.providerId = "AI provider is required.";
   }
 
   if (form.userRequest.trim() === "") {
