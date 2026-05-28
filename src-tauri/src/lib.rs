@@ -331,6 +331,9 @@ struct GenerateAgentKitDraftInput {
     desired_validation_level: ValidationProfile,
     constraints: Option<String>,
     source_notes: Option<String>,
+    requested_sections: Option<Vec<String>>,
+    excluded_sections: Option<Vec<String>>,
+    example_input_documents: Option<Vec<serde_json::Value>>,
     provider_id: Option<String>,
     model: Option<String>,
 }
@@ -343,6 +346,9 @@ struct ReviseAgentKitDraftInput {
     desired_validation_level: ValidationProfile,
     constraints: Option<String>,
     source_notes: Option<String>,
+    requested_sections: Option<Vec<String>>,
+    excluded_sections: Option<Vec<String>>,
+    example_input_documents: Option<Vec<serde_json::Value>>,
     provider_id: Option<String>,
     model: Option<String>,
 }
@@ -373,6 +379,12 @@ struct RenderGeneratedAgentKitDraftInput {
     draft_json: serde_json::Value,
     output_folder: String,
     force: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectExampleInputDocumentsInput {
+    allow_multiple: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -479,6 +491,27 @@ fn select_agent_kit_package_file() -> Result<Option<String>, String> {
         .pick_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+fn select_example_input_documents(
+    input: Option<SelectExampleInputDocumentsInput>,
+) -> Result<Vec<String>, String> {
+    let dialog = rfd::FileDialog::new()
+        .set_title("Select Example Input Document")
+        .add_filter("Example documents", &["txt", "md", "csv", "xlsx", "xls"]);
+    let allow_multiple = input.map(|value| value.allow_multiple).unwrap_or(true);
+
+    let paths = if allow_multiple {
+        dialog.pick_files().unwrap_or_default()
+    } else {
+        dialog.pick_file().into_iter().collect()
+    };
+
+    Ok(paths
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect())
 }
 
 #[tauri::command]
@@ -784,6 +817,9 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
         "desiredValidationLevel": input.desired_validation_level.as_str(),
         "constraints": split_lines_or_commas(input.constraints.as_deref()),
         "sourceNotes": split_lines_or_commas(input.source_notes.as_deref()),
+        "requestedSections": input.requested_sections.unwrap_or_default(),
+        "excludedSections": input.excluded_sections.unwrap_or_default(),
+        "exampleInputDocuments": input.example_input_documents.unwrap_or_default(),
         "model": model,
     });
 
@@ -826,6 +862,9 @@ async fn revise_agent_kit_draft_with_ai<R: Runtime>(
         "desiredValidationLevel": input.desired_validation_level.as_str(),
         "constraints": split_lines_or_commas(input.constraints.as_deref()),
         "sourceNotes": split_lines_or_commas(input.source_notes.as_deref()),
+        "requestedSections": input.requested_sections.unwrap_or_default(),
+        "excludedSections": input.excluded_sections.unwrap_or_default(),
+        "exampleInputDocuments": input.example_input_documents.unwrap_or_default(),
         "model": model,
     });
 
@@ -1189,6 +1228,49 @@ fn get_agent_kit_summary<R: Runtime>(
         .map_err(|error| format!("Unable to inspect Agent Kit summary: {error}"))?;
 
     parse_node_json_output(output, "Agent Kit summary")
+}
+
+#[tauri::command]
+fn load_agent_kit_as_draft<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let kit_path = canonicalize_directory(&path)?;
+    let bridge_script = resolve_app_support_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("load-draft")
+        .arg(&kit_path)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to load Agent Kit as draft: {error}"))?;
+
+    parse_node_json_output(output, "Agent Kit draft load")
+}
+
+#[tauri::command]
+fn summarize_example_input_documents<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    paths: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    if paths.is_empty() {
+        return Ok(serde_json::Value::Array(Vec::new()));
+    }
+
+    let bridge_script = resolve_app_support_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+    let paths_json = serde_json::to_string(&paths)
+        .map_err(|error| format!("Unable to serialize example document paths: {error}"))?;
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("example-documents")
+        .arg(paths_json)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to summarize example input documents: {error}"))?;
+
+    parse_node_json_output(output, "Example input document summary")
 }
 
 #[tauri::command]
@@ -2311,6 +2393,7 @@ pub fn run() {
             select_json_file,
             select_json_output_path,
             select_agent_kit_package_file,
+            select_example_input_documents,
             validate_agent_kit,
             list_prepared_prompts,
             render_prepared_prompt,
@@ -2349,6 +2432,8 @@ pub fn run() {
             import_agent_kit_package,
             inspect_agent_kit_candidate,
             get_agent_kit_summary,
+            load_agent_kit_as_draft,
+            summarize_example_input_documents,
             import_agent_kit_from_git,
             open_external_url,
             export_agent_kit_to_codex,

@@ -1,10 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const [, , action, kitPath] = process.argv;
+const [, , action, input] = process.argv;
 
-if (!action || !kitPath) {
-  console.error("Usage: node agent-kit-app-support.mjs <inspect|summary> <kitPath>");
+if (!action || !input) {
+  console.error("Usage: node agent-kit-app-support.mjs <inspect|summary|load-draft|example-documents> <input>");
   process.exit(2);
 }
 
@@ -12,14 +13,27 @@ try {
   const core = await loadCore();
 
   if (action === "inspect") {
-    const inspection = await core.inspectAgentKitCandidate(kitPath);
+    const inspection = await core.inspectAgentKitCandidate(input);
     process.stdout.write(JSON.stringify(inspection));
     process.exit(0);
   }
 
   if (action === "summary") {
-    const summary = await core.getAgentKitSummary(kitPath);
+    const summary = await core.getAgentKitSummary(input);
     process.stdout.write(JSON.stringify(summary));
+    process.exit(0);
+  }
+
+  if (action === "load-draft") {
+    const result = await core.loadAgentKitAsDraft(input);
+    process.stdout.write(JSON.stringify(result));
+    process.exit(0);
+  }
+
+  if (action === "example-documents") {
+    const filePaths = JSON.parse(input);
+    const documents = await Promise.all(filePaths.map((filePath, index) => loadExampleDocument(core, filePath, index)));
+    process.stdout.write(JSON.stringify(documents));
     process.exit(0);
   }
 
@@ -27,6 +41,38 @@ try {
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
+}
+
+async function loadExampleDocument(core, filePath, index) {
+  const filename = path.basename(filePath);
+  const kind = core.inferExampleInputDocumentKind(filename);
+  if (!kind) {
+    throw new Error(`Unsupported example input document: ${filename}`);
+  }
+
+  const stat = await fs.stat(filePath);
+  const document = {
+    id: `example-input-${index + 1}`,
+    name: filename.replace(/\.[^.]+$/, ""),
+    filename,
+    kind,
+    notes: `${filename} (${formatBytes(stat.size)})`,
+  };
+
+  if (kind === "text" || kind === "markdown" || kind === "csv") {
+    const content = await fs.readFile(filePath, "utf8");
+    document.extractedText = content.length > 12000 ? `${content.slice(0, 12000)}\n\n[Preview truncated]` : content;
+  } else if (kind === "spreadsheet") {
+    document.notes = `${document.notes}. Spreadsheet parsing is not enabled in the desktop app yet; use the file name and metadata as source notes.`;
+  }
+
+  return document;
+}
+
+function formatBytes(value) {
+  if (value < 1024) return `${value} bytes`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 async function loadCore() {

@@ -32,6 +32,9 @@ try {
       desiredValidationLevel: input.desiredValidationLevel,
       constraints: input.constraints,
       sourceNotes: input.sourceNotes,
+      requestedSections: input.requestedSections,
+      excludedSections: input.excludedSections,
+      exampleInputDocuments: input.exampleInputDocuments,
     });
     const rawText = await callProvider(provider, model, revisionRequest);
     const draftJson = parseJsonObject(rawText);
@@ -66,6 +69,9 @@ try {
     desiredValidationLevel: input.desiredValidationLevel,
     constraints: input.constraints,
     sourceNotes: input.sourceNotes,
+    requestedSections: input.requestedSections,
+    excludedSections: input.excludedSections,
+    exampleInputDocuments: input.exampleInputDocuments,
   });
   const rawText = await callProvider(provider, model, draftRequest);
   const draftJson = parseJsonObject(rawText);

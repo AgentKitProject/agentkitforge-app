@@ -35,7 +35,7 @@ type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
 type ThemeMode = "light" | "dark";
-type BuildTabId = "ai" | "guided" | "template" | "draft";
+type BuildTabId = "ai" | "guided" | "template" | "draft" | "edit-ai" | "guided-edit";
 type ImportTabId = "zip" | "folder" | "git" | "market" | "org";
 
 type AiProviderConfig = {
@@ -118,6 +118,9 @@ type GenerateAgentKitDraftInput = {
   desiredValidationLevel: ValidationProfile;
   constraints: string;
   sourceNotes: string;
+  requestedSections: string[];
+  excludedSections: string[];
+  exampleInputDocuments: ExampleInputDocument[];
   providerId: string;
   model: string;
 };
@@ -162,8 +165,29 @@ type ReviseAgentKitDraftInput = {
   desiredValidationLevel: ValidationProfile;
   constraints: string;
   sourceNotes: string;
+  requestedSections: string[];
+  excludedSections: string[];
+  exampleInputDocuments: ExampleInputDocument[];
   providerId: string;
   model: string;
+};
+
+type ExampleInputDocument = {
+  id: string;
+  name: string;
+  filename: string;
+  mediaType?: string;
+  kind: "text" | "markdown" | "csv" | "spreadsheet";
+  extractedText?: string;
+  tablePreview?: string[][];
+  notes?: string;
+  path?: string;
+};
+
+type LoadAgentKitAsDraftResult = {
+  draft: unknown;
+  warnings: string[];
+  sourceFiles: string[];
 };
 
 type CreateAgentKitInput = {
@@ -428,11 +452,62 @@ const validationProfiles: ValidationProfile[] = ["local-valid", "publishable", "
 const contextModes: AgentKitContextMode[] = ["all", "triggered"];
 const contextTargets: AgentKitContextTarget[] = ["openai", "chatgpt", "claude", "generic"];
 const agentKitTemplates: AgentKitTemplate[] = ["blank", "financial-review"];
-const buildTabs: { id: BuildTabId; label: string }[] = [
-  { id: "ai", label: "Build with AI" },
-  { id: "guided", label: "Guided Builder" },
-  { id: "template", label: "From Template" },
-  { id: "draft", label: "From Draft JSON" },
+const buildModes: {
+  id: BuildTabId;
+  group: "Create New" | "Edit Existing";
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+  title: string;
+  description: string;
+  bestFor: string;
+}[] = [
+  {
+    id: "ai",
+    group: "Create New",
+    icon: Sparkles,
+    title: "Build with AI",
+    description: "Describe the kit you want, revise the draft, then save when ready.",
+    bestFor: "Fastest start",
+  },
+  {
+    id: "guided",
+    group: "Create New",
+    icon: Hammer,
+    title: "Guided Builder",
+    description: "Create a kit step by step with forms and prepared prompts.",
+    bestFor: "No-code manual build",
+  },
+  {
+    id: "template",
+    group: "Create New",
+    icon: Box,
+    title: "From Template",
+    description: "Start from a simple built-in template.",
+    bestFor: "Known starter kit",
+  },
+  {
+    id: "draft",
+    group: "Create New",
+    icon: FileArchive,
+    title: "From Draft JSON",
+    description: "Render an existing AgentKitDraft JSON file.",
+    bestFor: "Advanced",
+  },
+  {
+    id: "edit-ai",
+    group: "Edit Existing",
+    icon: Sparkles,
+    title: "Edit with AI",
+    description: "Load a kit from My Kits, request changes, and save an updated draft.",
+    bestFor: "Iterative updates",
+  },
+  {
+    id: "guided-edit",
+    group: "Edit Existing",
+    icon: Hammer,
+    title: "Guided Editor",
+    description: "Load an existing kit into the form builder and edit without touching files.",
+    bestFor: "Careful manual edits",
+  },
 ];
 const guidedSteps: { id: GuidedBuilderStep; label: string }[] = [
   { id: "basics", label: "Basics" },
@@ -442,6 +517,19 @@ const guidedSteps: { id: GuidedBuilderStep; label: string }[] = [
   { id: "prompts", label: "Prepared Prompts" },
   { id: "examples", label: "Examples - Optional" },
   { id: "review", label: "Review & Create" },
+];
+const requiredBuildSections = ["basics", "skills", "preparedPrompts"];
+const buildSectionOptions = [
+  { id: "basics", label: "Basics", required: true, help: "Kit name, description, domain, and target users." },
+  { id: "skills", label: "Skills", required: true, help: "The tasks this Agent Kit can perform." },
+  { id: "preparedPrompts", label: "Prepared Prompts", required: true, help: "Reusable prompts users can run later." },
+  { id: "policies", label: "Policies", help: "Guardrails for what the AI should avoid, require, or escalate." },
+  { id: "templates", label: "Templates / Outputs", help: "Expected output shapes and reusable templates." },
+  { id: "examples", label: "Examples", help: "Good prompt and output examples." },
+  { id: "workflows", label: "Workflows", help: "Step-by-step repeatable processes." },
+  { id: "references", label: "References", help: "Reference notes or source material." },
+  { id: "evals", label: "Evals", help: "Checks that can be used to test kit quality." },
+  { id: "scripts", label: "Scripts", advanced: true, help: "Advanced helper scripts. Avoid unless the kit really needs code." },
 ];
 const knownDomains = [
   "Finance / Accounting",
@@ -1878,9 +1966,17 @@ function BuildScreen({
     desiredValidationLevel: "local-valid",
     constraints: "",
     sourceNotes: "",
+    requestedSections: defaultRequestedBuildSections(),
+    excludedSections: defaultExcludedBuildSections(defaultRequestedBuildSections()),
+    exampleInputDocuments: [],
     providerId: settings.defaultAiProviderId || "",
     model: settings.defaultModel || defaultRuntimeModel,
   });
+  const [myKitsForBuild, setMyKitsForBuild] = useState<MyKitEntry[]>([]);
+  const [editKitPath, setEditKitPath] = useState("");
+  const [editDraftLoad, setEditDraftLoad] = useState<LoadAgentKitAsDraftResult | null>(null);
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [isLoadingEditDraft, setIsLoadingEditDraft] = useState(false);
   const [aiResult, setAiResult] = useState<GenerateAgentKitDraftResult | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [draftChangeRequest, setDraftChangeRequest] = useState("");
@@ -1889,6 +1985,7 @@ function BuildScreen({
     Partial<Record<keyof GenerateAgentKitDraftInput | "apiKey", string>>
   >({});
   const [isGeneratingDraft, setIsGeneratingDraft] = useState(false);
+  const [isSelectingExampleDocuments, setIsSelectingExampleDocuments] = useState(false);
   const [draftCopyState, setDraftCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [draftSavePath, setDraftSavePath] = useState<string | null>(null);
   const [generatedRenderOutputFolder, setGeneratedRenderOutputFolder] = useState(
@@ -1902,7 +1999,7 @@ function BuildScreen({
   const [isRenderingGeneratedDraft, setIsRenderingGeneratedDraft] = useState(false);
   const [activeBuildTab, setActiveBuildTab] = useState<BuildTabId>(() => {
     const saved = window.localStorage.getItem("agentkitforge.lastBuildTab") as BuildTabId | null;
-    return saved && buildTabs.some((tab) => tab.id === saved) ? saved : "ai";
+    return saved && buildModes.some((tab) => tab.id === saved) ? saved : "ai";
   });
   const [guidedStep, setGuidedStep] = useState<GuidedBuilderStep>("basics");
   const [guidedForm, setGuidedForm] = useState<GuidedBuilderState>(() =>
@@ -1917,6 +2014,139 @@ function BuildScreen({
   function selectBuildTab(tabId: BuildTabId) {
     setActiveBuildTab(tabId);
     window.localStorage.setItem("agentkitforge.lastBuildTab", tabId);
+  }
+
+  useEffect(() => {
+    invoke<MyKitEntry[]>("list_my_kits")
+      .then(setMyKitsForBuild)
+      .catch(() => setMyKitsForBuild([]));
+  }, []);
+
+  function updateBuildSections(sectionId: string, selected: boolean) {
+    const required = requiredBuildSections.includes(sectionId);
+    if (required) {
+      return;
+    }
+    setAiForm((current) => {
+      const requestedSections = selected
+        ? Array.from(new Set([...current.requestedSections, sectionId]))
+        : current.requestedSections.filter((section) => section !== sectionId);
+      return {
+        ...current,
+        requestedSections,
+        excludedSections: defaultExcludedBuildSections(requestedSections),
+      };
+    });
+    setAiResult(null);
+    setAiError(null);
+  }
+
+  async function selectExampleDocuments() {
+    setIsSelectingExampleDocuments(true);
+    setAiError(null);
+    try {
+      const paths = await invoke<string[]>("select_example_input_documents", {
+        input: { allowMultiple: true },
+      });
+      if (paths.length === 0) {
+        return;
+      }
+      const documents = await invoke<ExampleInputDocument[]>("summarize_example_input_documents", {
+        paths,
+      });
+      setAiForm((current) => ({
+        ...current,
+        exampleInputDocuments: [
+          ...current.exampleInputDocuments,
+          ...documents.map((document, index) => ({
+            ...document,
+            path: paths[index],
+          })),
+        ],
+      }));
+      setAiResult(null);
+    } catch (caughtError) {
+      setAiError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingExampleDocuments(false);
+    }
+  }
+
+  function removeExampleDocument(index: number) {
+    setAiForm((current) => ({
+      ...current,
+      exampleInputDocuments: current.exampleInputDocuments.filter((_, documentIndex) => documentIndex !== index),
+    }));
+    setAiResult(null);
+  }
+
+  async function loadEditKit(path: string) {
+    setEditKitPath(path);
+    setEditDraftLoad(null);
+    setEditLoadError(null);
+    setAiResult(null);
+    setDraftChangeRequest("");
+    if (!path) {
+      return;
+    }
+
+    setIsLoadingEditDraft(true);
+    try {
+      const loadResult = await invoke<LoadAgentKitAsDraftResult>("load_agent_kit_as_draft", { path });
+      setEditDraftLoad(loadResult);
+      const summary = summarizeAgentKitDraft(loadResult.draft);
+      setAiForm((current) => ({
+        ...current,
+        userRequest: `Revise ${summary.name}`,
+        domain: summary.domain === "Not specified" ? current.domain : summary.domain,
+        targetUsers: summary.targetUsers === "Not specified" ? current.targetUsers : summary.targetUsers,
+      }));
+      const session: AgentKitDraftSession = {
+        id: `edit-session-${Date.now()}`,
+        name: summary.name,
+        originalRequest: `Edit existing Agent Kit: ${summary.name}`,
+        currentRevisionId: "revision-1",
+        revisions: [
+          {
+            id: "revision-1",
+            version: 1,
+            draft: loadResult.draft,
+            changeRequest: "Loaded existing kit",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        metadata: {
+          desiredValidationLevel: aiForm.desiredValidationLevel,
+          sourceKitPath: path,
+        },
+      };
+      setAiResult({
+        draftJson: loadResult.draft,
+        draftJsonPretty: `${JSON.stringify(loadResult.draft, null, 2)}\n`,
+        warnings: loadResult.warnings,
+        providerId: aiForm.providerId,
+        providerName: getSelectedProvider(settings, aiForm.providerId)?.name ?? "Selected provider",
+        model: aiForm.model,
+        session,
+        currentRevision: session.revisions[0],
+      });
+    } catch (caughtError) {
+      setEditLoadError(errorToMessage(caughtError));
+    } finally {
+      setIsLoadingEditDraft(false);
+    }
+  }
+
+  async function loadGuidedEditKit(path: string) {
+    await loadEditKit(path);
+    try {
+      const loadResult = await invoke<LoadAgentKitAsDraftResult>("load_agent_kit_as_draft", { path });
+      setGuidedForm(guidedBuilderStateFromDraft(loadResult.draft, settings.defaultOutputFolder));
+    } catch (caughtError) {
+      setGuidedError(errorToMessage(caughtError));
+    }
   }
 
   function updateGuidedForm<Key extends keyof GuidedBuilderState>(
@@ -2188,6 +2418,40 @@ function BuildScreen({
     }
   }
 
+  async function saveGuidedUpdate() {
+    if (!editKitPath) {
+      setGuidedError("Select an existing kit before saving an update.");
+      return;
+    }
+    if (!window.confirm("This updates the selected Agent Kit files. Continue?")) {
+      return;
+    }
+    const validationError = validateGuidedBuilder(guidedForm);
+    setGuidedError(validationError);
+    setGuidedResult(null);
+    setGuidedValidationReport(null);
+    if (validationError) {
+      return;
+    }
+    setIsCreatingGuidedKit(true);
+    try {
+      const draft = buildGuidedAgentKitDraft(guidedForm);
+      const result = await invoke<RenderAgentKitDraftResult>("render_generated_agent_kit_draft", {
+        input: {
+          draftJson: draft,
+          outputFolder: editKitPath,
+          force: true,
+        },
+      });
+      setGuidedResult(result);
+      onKitReady(result.rootPath);
+    } catch (caughtError) {
+      setGuidedError(errorToMessage(caughtError));
+    } finally {
+      setIsCreatingGuidedKit(false);
+    }
+  }
+
   async function openGuidedFolder() {
     if (!guidedResult) {
       return;
@@ -2400,6 +2664,9 @@ function BuildScreen({
         desiredValidationLevel: aiForm.desiredValidationLevel,
         constraints: aiForm.constraints,
         sourceNotes: aiForm.sourceNotes,
+        requestedSections: aiForm.requestedSections,
+        excludedSections: aiForm.excludedSections,
+        exampleInputDocuments: aiForm.exampleInputDocuments,
         providerId: aiForm.providerId,
         model: aiForm.model,
       };
@@ -2542,24 +2809,53 @@ function BuildScreen({
     }
   }
 
+  async function saveEditUpdate() {
+    if (!aiResult || !editKitPath) {
+      setGeneratedRenderError("Select an existing kit before saving an update.");
+      return;
+    }
+    if (!window.confirm("This updates the selected Agent Kit files. Continue?")) {
+      return;
+    }
+
+    setIsRenderingGeneratedDraft(true);
+    setGeneratedRenderError(null);
+    setGeneratedRenderResult(null);
+
+    try {
+      const result = await invoke<RenderAgentKitDraftResult>("render_generated_agent_kit_draft", {
+        input: {
+          draftJson: aiResult.draftJson,
+          outputFolder: editKitPath,
+          force: true,
+        },
+      });
+      setGeneratedRenderResult(result);
+      onKitReady(result.rootPath);
+    } catch (caughtError) {
+      setGeneratedRenderError(errorToMessage(caughtError));
+    } finally {
+      setIsRenderingGeneratedDraft(false);
+    }
+  }
+
+  async function addRenderedKitToMyKits(rootPath: string) {
+    try {
+      await invoke<MyKitEntry>("add_kit_to_library", {
+        input: { path: rootPath, source: "built" },
+      });
+      onKitReady(rootPath);
+    } catch (caughtError) {
+      setGeneratedRenderError(errorToMessage(caughtError));
+      setGuidedError(errorToMessage(caughtError));
+    }
+  }
+
   const validationProfile = defaultValidationProfileForTemplate(result?.template ?? form.template);
 
   return (
     <div className="build-screen">
-      <div className="tab-list" role="tablist" aria-label="Builder modes">
-        {buildTabs.map((tab) => (
-          <button
-            aria-selected={activeBuildTab === tab.id}
-            className={`tab-button ${activeBuildTab === tab.id ? "active" : ""}`}
-            key={tab.id}
-            onClick={() => selectBuildTab(tab.id)}
-            role="tab"
-            type="button"
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <BuildModePicker activeMode={activeBuildTab} onSelect={selectBuildTab} />
 
       {activeBuildTab === "ai" && (
       <div className="build-layout">
@@ -2684,6 +2980,18 @@ function BuildScreen({
             value={aiForm.sourceNotes}
           />
 
+          <BuildSectionSelector
+            selectedSections={aiForm.requestedSections}
+            onToggle={updateBuildSections}
+          />
+
+          <ExampleInputDocumentsPanel
+            documents={aiForm.exampleInputDocuments}
+            isSelecting={isSelectingExampleDocuments}
+            onRemove={removeExampleDocument}
+            onSelect={selectExampleDocuments}
+          />
+
           <LabelWithHelp
             htmlFor="ai-model"
             label="Model"
@@ -2738,9 +3046,180 @@ function BuildScreen({
             isSelectingRenderOutput={isSelectingGeneratedRenderOutput}
             isRenderingDraft={isRenderingGeneratedDraft}
             onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
+            onAddToMyKits={addRenderedKitToMyKits}
+            saveLabel="Save"
           />
         </div>
       </div>
+      )}
+
+      {activeBuildTab === "edit-ai" && (
+        <div className="build-layout">
+          <div className="form-panel">
+            <h2>Edit with AI</h2>
+            <p className="form-copy">Load an existing kit from My Kits, ask for changes, then save the updated draft when ready.</p>
+            <MyKitSelector
+              currentKitPath={editKitPath}
+              kits={myKitsForBuild}
+              label="Agent Kit"
+              onChange={loadEditKit}
+            />
+            {isLoadingEditDraft && <p className="state-copy">Loading kit draft...</p>}
+            {editLoadError && <div className="error-state" role="alert">{editLoadError}</div>}
+            {editDraftLoad && (
+              <>
+                <AIDraftSummary
+                  summary={summarizeAgentKitDraft(editDraftLoad.draft)}
+                  validationTarget={aiForm.desiredValidationLevel}
+                />
+                {editDraftLoad.warnings.length > 0 && (
+                  <div className="inline-warning">
+                    {editDraftLoad.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+                  </div>
+                )}
+              </>
+            )}
+
+            <LabelWithHelp
+              htmlFor="edit-ai-provider"
+              label="AI provider"
+              help="Choose the AI service or local model that will revise the kit."
+            />
+            <select
+              id="edit-ai-provider"
+              onChange={(event) => {
+                const provider = settings.aiProviders.find((item) => item.id === event.target.value);
+                setAiForm((current) => ({
+                  ...current,
+                  providerId: event.target.value,
+                  model: provider?.defaultModel || current.model,
+                }));
+              }}
+              value={aiForm.providerId}
+            >
+              <option value="">Select provider</option>
+              {settings.aiProviders.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name} ({provider.providerType})
+                </option>
+              ))}
+            </select>
+            <ModelInput
+              id="edit-ai-model"
+              model={aiForm.model}
+              onModelChange={(value) => updateAiForm("model", value)}
+              providerType={getSelectedProvider(settings, aiForm.providerId)?.providerType}
+            />
+            <BuildSectionSelector selectedSections={aiForm.requestedSections} onToggle={updateBuildSections} />
+            <ExampleInputDocumentsPanel
+              documents={aiForm.exampleInputDocuments}
+              isSelecting={isSelectingExampleDocuments}
+              onRemove={removeExampleDocument}
+              onSelect={selectExampleDocuments}
+            />
+          </div>
+          <div className="results-panel">
+            <div className="panel-label">AI Draft Session</div>
+            <GeneratedDraftResults
+              copyState={draftCopyState}
+              changeRequest={draftChangeRequest}
+              error={aiError}
+              isLoading={isGeneratingDraft}
+              isRevising={isRevisingDraft}
+              onChangeRequestChange={setDraftChangeRequest}
+              onClearSession={clearDraftSession}
+              onCopyJson={copyGeneratedDraftJson}
+              onRenderDraft={renderGeneratedDraft}
+              onRequestChanges={requestDraftChanges}
+              onSaveJson={saveGeneratedDraftJson}
+              onRestoreRevision={restoreDraftRevision}
+              result={aiResult}
+              savePath={draftSavePath}
+              renderOutputFolder={generatedRenderOutputFolder}
+              onRenderOutputFolderChange={(value) => {
+                setGeneratedRenderOutputFolder(value);
+                setGeneratedRenderError(null);
+                setGeneratedRenderResult(null);
+              }}
+              onSelectRenderOutputFolder={selectGeneratedRenderOutputFolder}
+              renderForce={generatedRenderForce}
+              onRenderForceChange={setGeneratedRenderForce}
+              renderError={generatedRenderError}
+              renderResult={generatedRenderResult}
+              isSelectingRenderOutput={isSelectingGeneratedRenderOutput}
+              isRenderingDraft={isRenderingGeneratedDraft}
+              onValidateRenderedKit={(rootPath) => onValidateCreatedKit(rootPath, "local-valid")}
+              onAddToMyKits={addRenderedKitToMyKits}
+              onSaveUpdate={saveEditUpdate}
+              saveLabel="Save as new kit"
+              updateLabel="Save update"
+            />
+          </div>
+        </div>
+      )}
+
+      {activeBuildTab === "guided-edit" && (
+        <div className="build-layout">
+          <div className="form-panel">
+            <h2>Guided Editor</h2>
+            <p className="form-copy">Choose a kit from My Kits, load it into the Guided Builder, then save changes.</p>
+            <MyKitSelector
+              currentKitPath={editKitPath}
+              kits={myKitsForBuild}
+              label="Agent Kit"
+              onChange={loadGuidedEditKit}
+            />
+            {isLoadingEditDraft && <p className="state-copy">Loading kit draft...</p>}
+            {editLoadError && <div className="error-state" role="alert">{editLoadError}</div>}
+            {editDraftLoad && (
+              <div className="inline-warning">
+                Save update rewrites files for the selected kit. Use Save as new kit if you want to keep the original unchanged.
+              </div>
+            )}
+            <button
+              className="primary-button"
+              disabled={!editKitPath || isCreatingGuidedKit}
+              onClick={saveGuidedUpdate}
+              type="button"
+            >
+              {isCreatingGuidedKit ? "Saving" : "Save update"}
+            </button>
+          </div>
+          <GuidedBuilder
+            error={guidedError}
+            form={guidedForm}
+            isCreating={isCreatingGuidedKit}
+            isSelectingOutput={isSelectingGuidedOutput}
+            onAddExample={addGuidedExample}
+            onAddPolicy={() => addGuidedPolicy()}
+            onAddPrompt={addGuidedPreparedPrompt}
+            onAddPromptInput={addGuidedPromptInput}
+            onAddSkill={addGuidedSkill}
+            onApplyPreset={addDomainGuardrailPreset}
+            onCreate={createGuidedKit}
+            onOpenFolder={openGuidedFolder}
+            onPackageKit={onPackageKit}
+            onRemoveExample={removeGuidedExample}
+            onRemovePolicy={removeGuidedPolicy}
+            onRemovePrompt={removeGuidedPreparedPrompt}
+            onRemovePromptInput={removeGuidedPromptInput}
+            onRemoveSkill={removeGuidedSkill}
+            onSelectOutput={selectGuidedOutputFolder}
+            onStepChange={setGuidedStep}
+            onUpdate={updateGuidedForm}
+            onUpdateExample={updateGuidedExample}
+            onUpdatePolicy={updateGuidedPolicy}
+            onUpdatePrompt={updateGuidedPreparedPrompt}
+            onUpdatePromptInput={updateGuidedPromptInput}
+            onUpdateName={updateGuidedName}
+            onUpdateSkill={updateGuidedSkill}
+            onUseKit={onUseKit}
+            onValidateKit={(rootPath) => onValidateCreatedKit(rootPath, guidedDefaultValidationProfile(guidedForm))}
+            result={guidedResult}
+            step={guidedStep}
+            validationReport={guidedValidationReport}
+          />
+        </div>
       )}
 
       {activeBuildTab === "guided" && (
@@ -2965,6 +3444,162 @@ function BuildScreen({
       )}
 
     </div>
+  );
+}
+
+function BuildModePicker({
+  activeMode,
+  onSelect,
+}: {
+  activeMode: BuildTabId;
+  onSelect: (mode: BuildTabId) => void;
+}) {
+  return (
+    <div className="build-mode-groups">
+      {(["Create New", "Edit Existing"] as const).map((group) => (
+        <section className="build-mode-group" key={group}>
+          <div className="panel-label">{group}</div>
+          <div className="build-mode-grid">
+            {buildModes.filter((mode) => mode.group === group).map((mode) => {
+              const Icon = mode.icon;
+              return (
+                <button
+                  aria-selected={activeMode === mode.id}
+                  className={`build-mode-card ${activeMode === mode.id ? "active" : ""}`}
+                  key={mode.id}
+                  onClick={() => onSelect(mode.id)}
+                  type="button"
+                >
+                  <Icon size={22} />
+                  <span>
+                    <strong>{mode.title}</strong>
+                    <small>{mode.description}</small>
+                    <em>{mode.bestFor}</em>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function BuildSectionSelector({
+  selectedSections,
+  onToggle,
+}: {
+  selectedSections: string[];
+  onToggle: (sectionId: string, selected: boolean) => void;
+}) {
+  return (
+    <div className="section-selector">
+      <div className="section-selector-header">
+        <LabelWithHelp
+          htmlFor="build-section-selector"
+          label="Sections to include"
+          help="Required sections are always included. Optional sections tell the AI what to add or avoid unless necessary."
+        />
+      </div>
+      <div className="section-chip-grid">
+        {buildSectionOptions.map((section) => {
+          const selected = selectedSections.includes(section.id);
+          return (
+            <label className={`section-chip ${selected ? "selected" : ""}`} key={section.id}>
+              <input
+                checked={selected}
+                disabled={section.required}
+                onChange={(event) => onToggle(section.id, event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                {section.label}
+                {section.required && <em>Required</em>}
+                {section.advanced && <em>Advanced</em>}
+                <small>{section.help}</small>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ExampleInputDocumentsPanel({
+  documents,
+  isSelecting,
+  onRemove,
+  onSelect,
+}: {
+  documents: ExampleInputDocument[];
+  isSelecting: boolean;
+  onRemove: (index: number) => void;
+  onSelect: () => void;
+}) {
+  return (
+    <div className="section-selector">
+      <div className="friendly-location-row">
+        <LabelWithHelp
+          htmlFor="example-input-documents"
+          label="Example input document"
+          help="Optional. Add a sample document, CSV, or spreadsheet so the AI can match expected formatting, terminology, and output style."
+        />
+        <button className="secondary-button compact-button" disabled={isSelecting} onClick={onSelect} type="button">
+          <FileArchive size={18} />
+          {isSelecting ? "Selecting" : "Attach document"}
+        </button>
+      </div>
+      {documents.length > 0 && (
+        <div className="artifact-list">
+          {documents.map((document, index) => (
+            <article className="artifact-item" key={`${document.filename}-${index}`}>
+              <div>
+                <div className="issue-code">{document.filename}</div>
+                <p>{document.kind}{document.notes ? ` - ${document.notes}` : ""}</p>
+                {document.path && (
+                  <details className="advanced-details compact-advanced">
+                    <summary>Show full path</summary>
+                    <div>{document.path}</div>
+                  </details>
+                )}
+              </div>
+              <button className="secondary-button compact-button" onClick={() => onRemove(index)} type="button">
+                Remove
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyKitSelector({
+  currentKitPath,
+  kits,
+  label,
+  onChange,
+}: {
+  currentKitPath: string;
+  kits: MyKitEntry[];
+  label: string;
+  onChange: (path: string) => void;
+}) {
+  return (
+    <>
+      <LabelWithHelp htmlFor="my-kit-selector" label={label} help="Choose a kit from My Kits. Import a kit first if it is not listed." />
+      <select id="my-kit-selector" onChange={(event) => onChange(event.target.value)} value={currentKitPath}>
+        <option value="">Select from My Kits</option>
+        {kits.filter((kit) => kit.pathExists).map((kit) => (
+          <option key={kit.path} value={kit.path}>
+            {kit.name} ({kit.version})
+          </option>
+        ))}
+      </select>
+      {kits.length === 0 && <p className="state-copy compact-state">No kits in My Kits yet. Build or import one first.</p>}
+    </>
   );
 }
 
@@ -6172,6 +6807,21 @@ function friendlyValidationLabel(value: string) {
   return value.replace(/\\/g, "/");
 }
 
+function defaultRequestedBuildSections() {
+  return [
+    ...requiredBuildSections,
+    "policies",
+    "templates",
+    "examples",
+  ];
+}
+
+function defaultExcludedBuildSections(requestedSections: string[]) {
+  return buildSectionOptions
+    .map((section) => section.id)
+    .filter((sectionId) => !requestedSections.includes(sectionId));
+}
+
 function appKitsFolder(settings: PublicSettings) {
   return settings.defaultOutputFolder || "";
 }
@@ -6411,6 +7061,80 @@ function createDefaultGuidedBuilderState(outputFolder: string): GuidedBuilderSta
     examples: [createDefaultExample(1)],
     force: false,
   };
+}
+
+function guidedBuilderStateFromDraft(draftInput: unknown, outputFolder: string): GuidedBuilderState {
+  const draft = isRecord(draftInput) ? draftInput : {};
+  const metadata = isRecord(draft.metadata) ? draft.metadata : {};
+  const skills = arrayOfRecords(draft.skills);
+  const policies = arrayOfRecords(draft.policies);
+  const prompts = arrayOfRecords(draft.preparedPrompts);
+  const examples = arrayOfRecords(draft.examples);
+
+  return {
+    name: stringValue(draft.name, "Imported Agent Kit"),
+    id: slugify(stringValue(draft.id, stringValue(draft.name, "imported-agent-kit"))),
+    description: stringValue(draft.description, ""),
+    domain: stringValue(draft.domain, stringValue(metadata.domain, "")),
+    targetUsers: formatUnknownList(draft.targetUsers) || formatUnknownList(metadata.targetUsers),
+    validationLevel: "local-valid",
+    outputFolder,
+    skills: skills.length > 0 ? skills.map((skill, index) => ({
+      id: slugify(stringValue(skill.id, `skill-${index + 1}`)),
+      name: stringValue(skill.name, stringValue(skill.id, `Skill ${index + 1}`)),
+      description: stringValue(skill.description, ""),
+      triggers: formatUnknownList(skill.triggers),
+      useWhen: stringValue(skill.useWhen, stringValue(skill.use_when, "")),
+      doNotUseWhen: stringValue(skill.doNotUseWhen, stringValue(skill.do_not_use_when, "")),
+      inputs: formatUnknownList(skill.inputs),
+      procedure: formatUnknownList(skill.procedure) || stringValue(skill.procedure, ""),
+      output: stringValue(skill.output, stringValue(skill.outputExpectations, "")),
+      riskLevel: stringValue(skill.riskLevel, "low") as GuidedSkill["riskLevel"],
+    })) : [createDefaultGuidedSkill(1)],
+    guardrails: policies.map((policy, index) => ({
+      id: stringValue(policy.id, `policy-${index + 1}`),
+      text: stringValue(policy.description, stringValue(policy.text, stringValue(policy.name, ""))),
+    })),
+    outputSections: "Summary\nKey findings\nRecommended next steps",
+    outputTemplate: "",
+    documentLike: prompts.some((prompt) => prompt.documentLikeOutput === true),
+    downloadFileName: "agent-kit-output",
+    summaryStyle: "Clear, practical, and user-facing",
+    preparedPrompts: prompts.length > 0 ? prompts.map((prompt, index) => ({
+      id: slugify(stringValue(prompt.id, `prompt-${index + 1}`)),
+      name: stringValue(prompt.name, stringValue(prompt.id, `Prompt ${index + 1}`)),
+      description: stringValue(prompt.description, ""),
+      template: stringValue(prompt.template, stringValue(prompt.prompt, "")),
+      inputs: arrayOfRecords(prompt.inputs).map((input, inputIndex) => ({
+        id: promptInputId(stringValue(input.id, `input-${inputIndex + 1}`)),
+        label: stringValue(input.label, stringValue(input.id, `Input ${inputIndex + 1}`)),
+        description: stringValue(input.description, stringValue(input.helpText, "")),
+        required: input.required !== false,
+        inputType: normalizeGuidedInputType(stringValue(input.type, "short-text")),
+        placeholder: stringValue(input.placeholder, stringValue(input.example, "")),
+        defaultValue: stringValue(input.defaultValue, ""),
+        includeInPrompt: input.includeInPrompt !== false,
+        choices: formatUnknownList(input.choices),
+      })),
+      outputMode: stringValue(prompt.outputMode, "markdown") as GuidedPreparedPrompt["outputMode"],
+      documentLikeOutput: prompt.documentLikeOutput === true,
+      suggestedFileName: stringValue(prompt.suggestedFileName, ""),
+      tags: formatUnknownList(prompt.tags),
+    })) : [createDefaultGuidedPrompt(1)],
+    examples: examples.length > 0 ? examples.map((example, index) => ({
+      id: stringValue(example.id, `example-${index + 1}`),
+      promptId: stringValue(example.promptId, ""),
+      prompt: stringValue(example.prompt, ""),
+      inputExamples: formatUnknownList(example.inputs) || stringValue(example.inputExamples, ""),
+      output: stringValue(example.output, stringValue(example.expectedOutput, "")),
+    })) : [createDefaultExample(1)],
+    force: true,
+  };
+}
+
+function normalizeGuidedInputType(value: string): GuidedRequiredInput["inputType"] {
+  const allowed: GuidedRequiredInput["inputType"][] = ["short-text", "long-text", "choice", "multi-choice", "date", "number", "boolean"];
+  return allowed.includes(value as GuidedRequiredInput["inputType"]) ? value as GuidedRequiredInput["inputType"] : "short-text";
 }
 
 function createDefaultGuidedSkill(index: number): GuidedSkill {
@@ -7746,7 +8470,9 @@ function GeneratedDraftResults({
   onRenderOutputFolderChange,
   onRequestChanges,
   onRestoreRevision,
+  onAddToMyKits,
   onSaveJson,
+  onSaveUpdate,
   onSelectRenderOutputFolder,
   onValidateRenderedKit,
   renderError,
@@ -7755,6 +8481,8 @@ function GeneratedDraftResults({
   renderResult,
   result,
   savePath,
+  saveLabel = "Save",
+  updateLabel,
 }: {
   changeRequest: string;
   copyState: "idle" | "copied" | "failed";
@@ -7771,7 +8499,9 @@ function GeneratedDraftResults({
   onRenderOutputFolderChange: (value: string) => void;
   onRequestChanges: () => void;
   onRestoreRevision: (revisionId: string) => void;
+  onAddToMyKits: (rootPath: string) => void;
   onSaveJson: () => void;
+  onSaveUpdate?: () => void;
   onSelectRenderOutputFolder: () => void;
   onValidateRenderedKit: (rootPath: string) => void;
   renderError: string | null;
@@ -7780,6 +8510,8 @@ function GeneratedDraftResults({
   renderResult: RenderAgentKitDraftResult | null;
   result: GenerateAgentKitDraftResult | null;
   savePath: string | null;
+  saveLabel?: string;
+  updateLabel?: string;
 }) {
   if (isLoading) {
     return <p className="state-copy">Generating AgentKitDraft JSON with the selected AI provider...</p>;
@@ -7796,7 +8528,7 @@ function GeneratedDraftResults({
   if (!result) {
     return (
       <p className="state-copy">
-        Generate a draft JSON object, review it, then save it or render it into an Agent Kit folder.
+        Generate or load a draft, review it, then click Save to create the Agent Kit files.
       </p>
     );
   }
@@ -7914,7 +8646,12 @@ function GeneratedDraftResults({
       </details>
 
       <div className="render-generated-panel">
-        <h3>Render this draft</h3>
+        <h3>Save this draft</h3>
+        {onSaveUpdate && (
+          <div className="inline-warning">
+            Save update rewrites files for the selected Agent Kit. Use Save as new kit to keep the original unchanged.
+          </div>
+        )}
         <LabelWithHelp
           htmlFor="generated-render-output"
           label="Save location"
@@ -7956,8 +8693,18 @@ function GeneratedDraftResults({
           type="button"
         >
           <FileArchive size={18} />
-          {isRenderingDraft ? "Rendering" : "Render this draft"}
+          {isRenderingDraft ? "Saving" : saveLabel}
         </button>
+        {onSaveUpdate && (
+          <button
+            className="secondary-button"
+            disabled={isRenderingDraft}
+            onClick={onSaveUpdate}
+            type="button"
+          >
+            {isRenderingDraft ? "Saving" : updateLabel || "Save update"}
+          </button>
+        )}
 
         {renderError && (
           <div className="error-state" role="alert">
@@ -7987,6 +8734,13 @@ function GeneratedDraftResults({
             >
               <CheckCircle2 size={18} />
               Validate rendered kit
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() => onAddToMyKits(renderResult.rootPath)}
+              type="button"
+            >
+              Add to My Kits
             </button>
           </div>
         )}

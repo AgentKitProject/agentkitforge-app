@@ -109,14 +109,21 @@ To regenerate app/taskbar icons after changing the SVG source, run `npx tauri ic
 
 ## Build Workspace
 
-The Build page is organized into tabs:
+The Build page is organized as a Create/Edit workspace.
+
+Create New:
 
 - **Build with AI**: default mode for describing the kit you want and generating a reviewable AgentKitDraft.
 - **Guided Builder**: step-by-step no-code builder for creating a kit entirely inside AgentKitForge.
 - **From Template**: creates a kit from `blank` or `financial-review`.
-- **From Draft JSON**: renders an existing AgentKitDraft JSON file into a kit folder.
+- **From Draft JSON - Advanced**: renders an existing AgentKitDraft JSON file into a kit folder.
 
-AgentKitForge remembers the last Build tab you used in local browser storage. If no tab has been used yet, Build opens on **Build with AI**.
+Edit Existing:
+
+- **Edit with AI**: load a kit from My Kits as a draft, request changes, and save an update or save as a new kit.
+- **Guided Editor**: load a kit from My Kits into the form builder and edit without touching YAML or Markdown.
+
+AgentKitForge remembers the last Build/Edit mode you used in local browser storage. If no mode has been used yet, Build opens on **Build with AI**.
 
 New kits default to the app-managed library folder, normally `Documents/AgentKitForge/Kits` on Windows. You can change the save location in Settings or per workflow.
 
@@ -226,11 +233,19 @@ In the Build section, describe the Agent Kit you want and optionally provide:
 - Desired validation level
 - Constraints
 - Source notes
+- Sections to include
+- Example input documents
 - Model override
 
 The domain field is searchable. You can select a known domain such as Finance / Accounting, Customer Support, Security, or Software Engineering, or type any custom domain. Known domains are suggestions, not restrictions.
 
 Build with AI is iterative. AgentKitForge uses `agentkitforge-core` to create a structured draft request, sends that request to the selected AI provider, parses the returned AgentKitDraft JSON, validates it against the core draft schema, and starts an AI Draft Session.
+
+Generated AI drafts are not usable Agent Kits yet and are not added to My Kits automatically. They remain draft sessions until you click **Save**, which renders the current draft into an Agent Kit folder. After saving, you can validate, add to My Kits, use the kit, or package/export it.
+
+The **Sections to include** control lets you choose which draft sections the AI should include. Basics, Skills, and Prepared Prompts are required and locked. Optional sections include Policies, Templates / Outputs, Examples, Workflows, References, Evals, and Scripts. Scripts are marked Advanced and should be selected only when the kit really needs code.
+
+The **Example input document** control accepts `.txt`, `.md`, `.csv`, `.xlsx`, and `.xls` files. Text, Markdown, and CSV files are summarized from their extracted text. Spreadsheet support is metadata-only in v0.1 unless richer parsing is added later. Example documents are used as source notes so the AI can infer terminology, formatting, required inputs, prepared prompts, and output style. AgentKitForge does not execute anything from attached documents.
 
 After the initial draft is created, the screen shows a friendly review workspace with:
 
@@ -242,7 +257,7 @@ After the initial draft is created, the screen shows a friendly review workspace
 
 To revise a draft, type a change request such as "Add a prepared prompt for client memos" or "Ask for company name and reporting period before running." AgentKitForge calls the core revision request builder, sends the current draft plus your change request to the selected provider, expects a full updated AgentKitDraft JSON response, validates it, and adds a new revision to the session.
 
-Revision history shows entries such as `v1 Initial draft`, `v2 <change request summary>`, and later revisions. You can restore an older revision and render the current revision when satisfied. Visual diffing is not implemented yet.
+Revision history shows entries such as `v1 Initial draft`, `v2 <change request summary>`, and later revisions. You can restore an older revision and save the current revision when satisfied. Visual diffing is not implemented yet.
 
 After generation, you can:
 
@@ -250,13 +265,23 @@ After generation, you can:
 - Save the draft JSON to disk.
 - Request changes and create new revisions.
 - Restore an older revision.
-- Render the current draft into an Agent Kit folder.
+- Save the current draft into an Agent Kit folder.
 - Validate the rendered kit.
 - Clear the session and start over.
 
 Draft JSON is the review and handoff step between AI-assisted planning and local kit generation. For v0.1, draft sessions live in app state during the session; use **Save draft JSON** to persist the current revision locally. You can edit saved drafts before rendering, or render them immediately and iterate on the generated kit files.
 
 If a provider is marked as not reliably supporting structured JSON, AgentKitForge warns before generation and revisions. The returned draft is still validated before it can be used.
+
+## Edit Existing Kits
+
+Use **Edit with AI** when you want a provider to revise an existing kit. Select a kit from My Kits, enter a change request, optionally attach example input documents, and request changes. The provider must return a full updated AgentKitDraft JSON object, not a patch. You can continue revising, save draft JSON, **Save update**, or **Save as new kit**.
+
+**Save update** rewrites the selected Agent Kit files after confirmation. **Save as new kit** renders the draft to the selected save location and leaves the original kit unchanged.
+
+Use **Guided Editor** when you want to edit an existing kit through forms. It loads the kit with `agentkitforge-core` `loadAgentKitAsDraft`, maps it into the Guided Builder sections, and lets you save an update or create a new rendered kit. Raw draft JSON stays under Advanced details.
+
+**From Draft JSON** is marked Advanced because it is mainly for users who already have a saved AgentKitDraft JSON file from another tool or from a prior draft session.
 
 ## Prepare for Web Assistant
 
