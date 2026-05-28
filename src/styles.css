@@ -357,6 +357,10 @@ textarea {
   align-items: start;
 }
 
+.import-screen .build-layout {
+  grid-template-columns: minmax(0, 760px);
+}
+
 .build-screen {
   display: grid;
   gap: 22px;
@@ -478,6 +482,27 @@ textarea {
 .guided-requirements-summary {
   display: grid;
   justify-content: stretch;
+}
+
+.inline-inspection {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--color-text-secondary);
+  background: var(--color-muted-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.inline-inspection strong,
+.inline-inspection h3 {
+  color: var(--color-text-primary);
+}
+
+.inspection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
 }
 
 .artifact-explainer {

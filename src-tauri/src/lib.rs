@@ -164,6 +164,42 @@ struct ImportAgentKitPackageResult {
     files: Vec<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentKitCandidateInspection {
+    path: String,
+    exists: bool,
+    is_directory: bool,
+    looks_like_agent_kit: bool,
+    missing_required_files: Vec<String>,
+    missing_required_folders: Vec<String>,
+    found_files: Vec<String>,
+    found_skills: Vec<String>,
+    recommended_fixes: Vec<String>,
+    validation_report: Option<ValidationReport>,
+    friendly_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportAgentKitFromGitInput {
+    repository_url: String,
+    reference: Option<String>,
+    destination_root_folder: String,
+    validation_profile: Option<ValidationProfile>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportAgentKitFromGitResult {
+    repository_url: String,
+    imported_path: Option<String>,
+    validation_report: Option<ValidationReport>,
+    metadata: Option<MyKitEntry>,
+    inspection: AgentKitCandidateInspection,
+    files: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExportAgentKitToCodexInput {
@@ -1130,6 +1166,92 @@ fn import_agent_kit_package<R: Runtime>(
 }
 
 #[tauri::command]
+fn inspect_agent_kit_candidate<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<AgentKitCandidateInspection, String> {
+    inspect_agent_kit_candidate_inner(&app, &path)
+}
+
+#[tauri::command]
+fn get_agent_kit_summary<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let bridge_script = resolve_app_support_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("summary")
+        .arg(path)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to inspect Agent Kit summary: {error}"))?;
+
+    parse_node_json_output(output, "Agent Kit summary")
+}
+
+#[tauri::command]
+fn import_agent_kit_from_git<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: ImportAgentKitFromGitInput,
+) -> Result<ImportAgentKitFromGitResult, String> {
+    let repository_url = clean_git_repository_url(&input.repository_url)?;
+    let destination_root = canonicalize_directory(&input.destination_root_folder)?;
+    let validation_profile = input
+        .validation_profile
+        .unwrap_or(ValidationProfile::LocalValid);
+    let repo_folder_name = repo_folder_name_from_url(&repository_url);
+    let temp_root = std::env::temp_dir().join(format!(
+        "agentkitforge-git-import-{}-{}",
+        now_timestamp(),
+        repo_folder_name
+    ));
+    fs::create_dir_all(&temp_root)
+        .map_err(|error| format!("Unable to prepare temporary Git import folder: {error}"))?;
+    let clone_folder = temp_root.join("repo");
+
+    clone_git_repository(&repository_url, input.reference.as_deref(), &clone_folder)?;
+
+    let inspection = inspect_agent_kit_candidate_inner(&app, &clone_folder.to_string_lossy())?;
+    if !inspection.looks_like_agent_kit {
+        let _ = fs::remove_dir_all(&temp_root);
+        return Ok(ImportAgentKitFromGitResult {
+            repository_url,
+            imported_path: None,
+            validation_report: None,
+            metadata: None,
+            inspection,
+            files: Vec::new(),
+        });
+    }
+
+    let target_folder_name = metadata_entry_from_path(&clone_folder, KitLibrarySource::Imported)
+        .map(|metadata| sanitize_folder_name(&metadata.id))
+        .unwrap_or(repo_folder_name);
+    let import_folder =
+        unique_or_forced_extraction_folder(&destination_root, &target_folder_name, false)?;
+    let files = copy_agent_kit_directory(&clone_folder, &import_folder)?;
+    let _ = fs::remove_dir_all(&temp_root);
+
+    let report = validate_agent_kit(
+        app,
+        import_folder.to_string_lossy().into_owned(),
+        validation_profile,
+    )?;
+    let metadata = metadata_entry_from_path(&import_folder, KitLibrarySource::Imported)?;
+
+    Ok(ImportAgentKitFromGitResult {
+        repository_url,
+        imported_path: Some(import_folder.to_string_lossy().into_owned()),
+        validation_report: Some(report),
+        metadata: Some(metadata),
+        inspection,
+        files,
+    })
+}
+
+#[tauri::command]
 fn export_agent_kit_to_codex<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: ExportAgentKitToCodexInput,
@@ -1395,6 +1517,10 @@ fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
 
 fn resolve_prepared_prompts_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "prepared-prompts.mjs")
+}
+
+fn resolve_app_support_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "agent-kit-app-support.mjs")
 }
 
 fn resolve_package_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
@@ -1989,6 +2115,132 @@ fn ensure_child_path(root: &Path, child: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn inspect_agent_kit_candidate_inner<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+) -> Result<AgentKitCandidateInspection, String> {
+    let bridge_script = resolve_app_support_bridge(app)?;
+    let node_command = resolve_node_command()?;
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("inspect")
+        .arg(path)
+        .current_dir(resolve_command_working_directory(app))
+        .output()
+        .map_err(|error| format!("Unable to inspect Agent Kit folder: {error}"))?;
+
+    parse_node_json_output(output, "Agent Kit inspection")
+}
+
+fn clean_git_repository_url(url: &str) -> Result<String, String> {
+    let repository_url = clean_required_value("Git repository URL", url)?;
+    if !repository_url.starts_with("https://") {
+        return Err(
+            "Use a public HTTPS Git repository URL for v0.1. Private repository authentication is not supported yet."
+                .to_string(),
+        );
+    }
+
+    Ok(repository_url)
+}
+
+fn repo_folder_name_from_url(url: &str) -> String {
+    let trimmed = url.trim_end_matches('/').trim_end_matches(".git");
+    let name = trimmed
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("git-agent-kit");
+    sanitize_folder_name(name)
+}
+
+fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command.arg("clone").arg("--depth").arg("1");
+    if let Some(reference) = clean_optional(reference) {
+        command.arg("--branch").arg(reference);
+    }
+    command.arg("--").arg(url).arg(destination);
+
+    let output = command
+        .output()
+        .map_err(|error| format!("Unable to start Git. Make sure Git is installed and available on PATH. Details: {error}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let detail = if stderr.is_empty() {
+        "Git clone failed. Check that the repository is public, the URL is correct, and the branch or ref exists."
+            .to_string()
+    } else {
+        stderr
+    };
+
+    Err(format!("Unable to import from Git repository. {detail}"))
+}
+
+fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<Vec<String>, String> {
+    if !source.is_dir() {
+        return Err("Git repository did not produce a folder to import.".to_string());
+    }
+
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
+    let mut files = Vec::new();
+    copy_agent_kit_directory_inner(source, source, destination, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn copy_agent_kit_directory_inner(
+    root: &Path,
+    current: &Path,
+    destination: &Path,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current)
+        .map_err(|error| format!("Unable to read imported repository folder: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Unable to read repository entry: {error}"))?;
+        let source_path = entry.path();
+        let relative_path = source_path
+            .strip_prefix(root)
+            .map_err(|error| format!("Unable to resolve repository file path: {error}"))?;
+
+        if relative_path
+            .components()
+            .any(|component| component.as_os_str().to_string_lossy() == ".git")
+        {
+            continue;
+        }
+
+        let destination_path = destination.join(relative_path);
+        if entry
+            .file_type()
+            .map_err(|error| format!("Unable to inspect repository entry: {error}"))?
+            .is_dir()
+        {
+            ensure_child_path(destination, &destination_path)?;
+            fs::create_dir_all(&destination_path)
+                .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
+            copy_agent_kit_directory_inner(root, &source_path, destination, files)?;
+        } else {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
+            }
+            ensure_child_path(destination, &destination_path)?;
+            fs::copy(&source_path, &destination_path)
+                .map_err(|error| format!("Unable to copy imported kit file: {error}"))?;
+            files.push(relative_path.to_string_lossy().replace('\\', "/"));
+        }
+    }
+
+    Ok(())
+}
+
 fn read_manifest_scalar(manifest: &str, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     manifest.lines().find_map(|line| {
@@ -2095,6 +2347,9 @@ pub fn run() {
             validate_library_kit,
             mark_library_kit_used,
             import_agent_kit_package,
+            inspect_agent_kit_candidate,
+            get_agent_kit_summary,
+            import_agent_kit_from_git,
             open_external_url,
             export_agent_kit_to_codex,
             export_agent_kit_to_claude_code

@@ -41,6 +41,7 @@
       "backend/package-agent-kit.mjs",
       "backend/build-agent-kit-context.mjs",
       "backend/prepared-prompts.mjs",
+      "backend/agent-kit-app-support.mjs",
       "backend/export-agent-kit-codex.mjs",
       "backend/export-agent-kit-claude-code.mjs"
     ]

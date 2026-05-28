@@ -4,6 +4,7 @@ import {
   FileArchive,
   FolderOutput,
   FolderOpen,
+  GitBranch,
   Hammer,
   Info,
   Plug,
@@ -35,6 +36,7 @@ type ValidationIssueSeverity = "error" | "warning";
 type AgentKitTemplate = "blank" | "financial-review";
 type ThemeMode = "light" | "dark";
 type BuildTabId = "ai" | "guided" | "template" | "draft";
+type ImportTabId = "zip" | "folder" | "git" | "market" | "org";
 
 type AiProviderConfig = {
   id: string;
@@ -209,6 +211,29 @@ type ImportAgentKitPackageResult = {
   extractedPath: string;
   validationReport: ValidationReport;
   metadata: MyKitEntry;
+  files: string[];
+};
+
+type AgentKitCandidateInspection = {
+  path: string;
+  exists: boolean;
+  isDirectory: boolean;
+  looksLikeAgentKit: boolean;
+  missingRequiredFiles: string[];
+  missingRequiredFolders: string[];
+  foundFiles: string[];
+  foundSkills: string[];
+  recommendedFixes: string[];
+  validationReport?: ValidationReport;
+  friendlySummary: string;
+};
+
+type ImportAgentKitFromGitResult = {
+  repositoryUrl: string;
+  importedPath?: string;
+  validationReport?: ValidationReport;
+  metadata?: MyKitEntry;
+  inspection: AgentKitCandidateInspection;
   files: string[];
 };
 
@@ -637,7 +662,6 @@ export function App() {
                 window.localStorage.setItem("agentkitforge.lastBuildTab", "ai");
                 setActiveSection("build");
               }}
-              onCurrentKitPathChange={(path) => updateAppState("currentKitPath", path)}
               onGuidedBuilder={() => {
                 window.localStorage.setItem("agentkitforge.lastBuildTab", "guided");
                 setActiveSection("build");
@@ -746,7 +770,6 @@ export function App() {
 
 function MyKitsScreen({
   onBuildWithAI,
-  onCurrentKitPathChange,
   onGuidedBuilder,
   onImportKit,
   onInstallKit,
@@ -755,7 +778,6 @@ function MyKitsScreen({
   onValidateKit,
 }: {
   onBuildWithAI: () => void;
-  onCurrentKitPathChange: (path: string) => void;
   onGuidedBuilder: () => void;
   onImportKit: () => void;
   onInstallKit: (path: string) => void;
@@ -765,7 +787,6 @@ function MyKitsScreen({
 }) {
   const [kits, setKits] = useState<MyKitEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -782,26 +803,6 @@ function MyKitsScreen({
       setError(errorToMessage(caughtError));
     } finally {
       setIsLoading(false);
-    }
-  }
-
-  async function addExistingKit() {
-    setIsAdding(true);
-    setError(null);
-
-    try {
-      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
-      if (selectedPath) {
-        await invoke<MyKitEntry>("add_kit_to_library", {
-          input: { path: selectedPath, source: "manual" },
-        });
-        onCurrentKitPathChange(selectedPath);
-        await loadKits();
-      }
-    } catch (caughtError) {
-      setError(errorToMessage(caughtError));
-    } finally {
-      setIsAdding(false);
     }
   }
 
@@ -881,17 +882,6 @@ function MyKitsScreen({
 
   return (
     <div className="my-kits-screen">
-      <div className="screen-toolbar">
-        <button className="secondary-button" onClick={onImportKit} type="button">
-          <FileArchive size={18} />
-          Import Agent Kit
-        </button>
-        <button className="primary-button" disabled={isAdding} onClick={addExistingKit} type="button">
-          <FolderOpen size={18} />
-          {isAdding ? "Adding" : "Add existing kit folder"}
-        </button>
-      </div>
-
       {error && (
         <div className="error-state" role="alert">
           {error}
@@ -991,13 +981,27 @@ function ImportScreen({
     force: false,
     validationProfile: settings.preferredValidationProfile,
   });
+  const [activeTab, setActiveTab] = useState<ImportTabId>("zip");
   const [result, setResult] = useState<ImportAgentKitPackageResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSelectingPackage, setIsSelectingPackage] = useState(false);
   const [isSelectingDestination, setIsSelectingDestination] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [folderPath, setFolderPath] = useState("");
+  const [folderInspection, setFolderInspection] = useState<AgentKitCandidateInspection | null>(null);
+  const [folderValidation, setFolderValidation] = useState<ValidationReport | null>(null);
   const [folderImportError, setFolderImportError] = useState<string | null>(null);
-  const [isAddingFolder, setIsAddingFolder] = useState(false);
+  const [isInspectingFolder, setIsInspectingFolder] = useState(false);
+  const [gitForm, setGitForm] = useState({
+    repositoryUrl: "",
+    reference: "",
+    destinationRootFolder: appKitsFolder(settings),
+    validationProfile: settings.preferredValidationProfile,
+  });
+  const [gitResult, setGitResult] = useState<ImportAgentKitFromGitResult | null>(null);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [isImportingGit, setIsImportingGit] = useState(false);
+  const [isSelectingGitDestination, setIsSelectingGitDestination] = useState(false);
 
   function updateForm<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -1078,21 +1082,107 @@ function ImportScreen({
     }
   }
 
-  async function addFolderImport() {
-    setIsAddingFolder(true);
+  async function selectFolderForImport() {
+    setIsInspectingFolder(true);
     setFolderImportError(null);
+    setFolderInspection(null);
+    setFolderValidation(null);
     try {
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
-        await invoke<MyKitEntry>("add_kit_to_library", {
-          input: { path: selectedPath, source: "manual" },
+        setFolderPath(selectedPath);
+        const inspection = await invoke<AgentKitCandidateInspection>("inspect_agent_kit_candidate", {
+          path: selectedPath,
         });
-        onKitImported(selectedPath);
+        setFolderInspection(inspection);
+
+        if (inspection.looksLikeAgentKit) {
+          const report = await invoke<ValidationReport>("validate_agent_kit", {
+            path: selectedPath,
+            profile: form.validationProfile,
+          });
+          setFolderValidation(report);
+          if (report.valid) {
+            await invoke<MyKitEntry>("add_kit_to_library", {
+              input: { path: selectedPath, source: "manual" },
+            });
+            onKitImported(selectedPath);
+          }
+        }
       }
     } catch (caughtError) {
       setFolderImportError(errorToMessage(caughtError));
     } finally {
-      setIsAddingFolder(false);
+      setIsInspectingFolder(false);
+    }
+  }
+
+  async function addFolderAnyway() {
+    if (!folderPath) {
+      return;
+    }
+    setFolderImportError(null);
+    try {
+      await invoke<MyKitEntry>("add_kit_to_library", {
+        input: { path: folderPath, source: "manual" },
+      });
+      onKitImported(folderPath);
+    } catch (caughtError) {
+      setFolderImportError(errorToMessage(caughtError));
+    }
+  }
+
+  function updateGitForm<Key extends keyof typeof gitForm>(key: Key, value: (typeof gitForm)[Key]) {
+    setGitForm((current) => ({ ...current, [key]: value }));
+    setGitResult(null);
+    setGitError(null);
+  }
+
+  async function selectGitDestinationFolder() {
+    setIsSelectingGitDestination(true);
+    setGitError(null);
+    try {
+      const selectedPath = await invoke<string | null>("select_agent_kit_folder");
+      if (selectedPath) {
+        updateGitForm("destinationRootFolder", selectedPath);
+      }
+    } catch (caughtError) {
+      setGitError(errorToMessage(caughtError));
+    } finally {
+      setIsSelectingGitDestination(false);
+    }
+  }
+
+  async function importGitRepository() {
+    setIsImportingGit(true);
+    setGitError(null);
+    setGitResult(null);
+    try {
+      if (!gitForm.repositoryUrl.trim()) {
+        throw new Error("Enter a public Git repository URL.");
+      }
+      if (!gitForm.destinationRootFolder.trim()) {
+        throw new Error("Choose an import destination.");
+      }
+      const importResult = await invoke<ImportAgentKitFromGitResult>("import_agent_kit_from_git", {
+        input: {
+          repositoryUrl: gitForm.repositoryUrl,
+          reference: gitForm.reference,
+          destinationRootFolder: gitForm.destinationRootFolder,
+          validationProfile: gitForm.validationProfile,
+        },
+      });
+      setGitResult(importResult);
+      if (importResult.importedPath && importResult.validationReport?.valid) {
+        await invoke<MyKitEntry>("add_kit_to_library", {
+          input: { path: importResult.importedPath, source: "imported" },
+        });
+        onKitImported(importResult.importedPath);
+      }
+    } catch (caughtError) {
+      setGitError(errorToMessage(caughtError));
+    } finally {
+      setIsImportingGit(false);
     }
   }
 
@@ -1110,51 +1200,76 @@ function ImportScreen({
   return (
     <div className="import-screen">
       <div className="tab-list" role="tablist" aria-label="Import options">
-        <button className="tab-button active" type="button">From .agentkit.zip</button>
-        <button className="tab-button" type="button">From Folder</button>
-        <button className="tab-button" disabled type="button">From Agent Kit Market - Coming later</button>
-        <button className="tab-button" disabled type="button">From Organization Repository - Coming later</button>
+        {[
+          ["zip", "From .agentkit.zip"],
+          ["folder", "From Folder"],
+          ["git", "From Git Repository"],
+          ["market", "From Agent Kit Market"],
+          ["org", "From Organization Repository"],
+        ].map(([tabId, label]) => (
+          <button
+            aria-selected={activeTab === tabId}
+            className={`tab-button ${activeTab === tabId ? "active" : ""}`}
+            key={tabId}
+            onClick={() => setActiveTab(tabId as ImportTabId)}
+            role="tab"
+            type="button"
+          >
+            {label}{tabId === "market" || tabId === "org" ? " - Coming later" : ""}
+          </button>
+        ))}
       </div>
 
       <div className="build-layout">
-        <ImportPackagePanel
-          form={form}
-          importError={error}
-          importResult={result}
-          isImporting={isImporting}
-          isSelectingDestination={isSelectingDestination}
-          isSelectingPackage={isSelectingPackage}
-          onAddInvalidImportAnyway={addInvalidImportAnyway}
-          onImportPackage={importPackage}
-          onOpenImportedFolder={openImportedFolder}
-          onPackageKit={onPackageKit}
-          onSelectDestinationFolder={selectDestinationFolder}
-          onSelectPackageFile={selectPackageFile}
-          onUpdateForm={updateForm}
-          onUseKit={onUseKit}
-        />
-
-        <div className="results-panel">
-          <div className="panel-label">Other Import Options</div>
-          <div className="empty-state compact-empty">
-            <FolderOpen size={34} strokeWidth={1.8} />
-            <h2>From Folder</h2>
-            <p>Add an existing Agent Kit folder to My Kits without copying or moving it.</p>
-            <button className="secondary-button" disabled={isAddingFolder} onClick={addFolderImport} type="button">
-              {isAddingFolder ? "Adding" : "Add existing kit..."}
-            </button>
-            {folderImportError && <div className="error-state" role="alert">{folderImportError}</div>}
-          </div>
-          <div className="empty-state compact-empty">
-            <PackageOpen size={34} strokeWidth={1.8} />
-            <h2>Coming later</h2>
-            <p>Agent Kit Market and organization repository imports are placeholders for a later release.</p>
-          </div>
-          <div className="help-link-row">
-            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
-            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
-          </div>
-        </div>
+        {activeTab === "zip" && (
+          <ImportPackagePanel
+            form={form}
+            importError={error}
+            importResult={result}
+            isImporting={isImporting}
+            isSelectingDestination={isSelectingDestination}
+            isSelectingPackage={isSelectingPackage}
+            onAddInvalidImportAnyway={addInvalidImportAnyway}
+            onImportPackage={importPackage}
+            onOpenImportedFolder={openImportedFolder}
+            onPackageKit={onPackageKit}
+            onSelectDestinationFolder={selectDestinationFolder}
+            onSelectPackageFile={selectPackageFile}
+            onUpdateForm={updateForm}
+            onUseKit={onUseKit}
+          />
+        )}
+        {activeTab === "folder" && (
+          <ImportFolderPanel
+            error={folderImportError}
+            folderPath={folderPath}
+            inspection={folderInspection}
+            isLoading={isInspectingFolder}
+            onAddAnyway={addFolderAnyway}
+            onOpenFolder={() => folderPath && invoke("open_folder", { path: folderPath })}
+            onPackageKit={onPackageKit}
+            onSelectFolder={selectFolderForImport}
+            onUseKit={onUseKit}
+            validationReport={folderValidation}
+          />
+        )}
+        {activeTab === "git" && (
+          <ImportGitPanel
+            error={gitError}
+            form={gitForm}
+            isImporting={isImportingGit}
+            isSelectingDestination={isSelectingGitDestination}
+            onImport={importGitRepository}
+            onOpenFolder={(path) => invoke("open_folder", { path })}
+            onPackageKit={onPackageKit}
+            onSelectDestination={selectGitDestinationFolder}
+            onUpdateForm={updateGitForm}
+            onUseKit={onUseKit}
+            result={gitResult}
+          />
+        )}
+        {activeTab === "market" && <ComingSoonImportPanel title="Agent Kit Market" />}
+        {activeTab === "org" && <ComingSoonImportPanel title="Organization Repository" />}
       </div>
     </div>
   );
@@ -1344,6 +1459,376 @@ type ImportPackagePanelProps = {
     validationProfile: ValidationProfile;
   };
 };
+
+function ImportFolderPanel({
+  error,
+  folderPath,
+  inspection,
+  isLoading,
+  onAddAnyway,
+  onOpenFolder,
+  onPackageKit,
+  onSelectFolder,
+  onUseKit,
+  validationReport,
+}: {
+  error: string | null;
+  folderPath: string;
+  inspection: AgentKitCandidateInspection | null;
+  isLoading: boolean;
+  onAddAnyway: () => void;
+  onOpenFolder: () => void;
+  onPackageKit: (path: string) => void;
+  onSelectFolder: () => void;
+  onUseKit: (path: string) => void;
+  validationReport: ValidationReport | null;
+}) {
+  const isValid = Boolean(validationReport?.valid);
+
+  return (
+    <div className="form-panel import-panel">
+      <h2>Import from Folder</h2>
+      <p className="form-copy">
+        Add an existing Agent Kit folder to My Kits. AgentKitForge checks the folder first so missing files are easier to fix.
+      </p>
+
+      <div className="friendly-location-row">
+        <span>Selected folder: {folderPath ? friendlyLocation(folderPath) : "None selected"}</span>
+        <button className="secondary-button compact-button" disabled={isLoading} onClick={onSelectFolder} type="button">
+          <FolderOpen size={18} />
+          Choose folder
+        </button>
+      </div>
+      {folderPath && (
+        <details className="advanced-details">
+          <summary>Show full path</summary>
+          <dl className="report-meta">
+            <div>
+              <dt>Full folder path</dt>
+              <dd>{folderPath}</dd>
+            </div>
+          </dl>
+        </details>
+      )}
+
+      {isLoading && <p className="state-copy">Inspecting folder...</p>}
+      {error && <div className="error-state" role="alert">{error}</div>}
+
+      {inspection && !inspection.looksLikeAgentKit && (
+        <CandidateInspectionPanel inspection={inspection} title="This folder does not look like an Agent Kit." />
+      )}
+
+      {inspection?.looksLikeAgentKit && validationReport && (
+        <div className="import-result">
+          <div className={`status-banner ${isValid ? "valid" : "invalid"}`}>
+            <strong>{isValid ? "Folder added to My Kits" : "Folder needs attention"}</strong>
+            <span>{validationReport.profile}</span>
+          </div>
+          <dl className="report-meta">
+            <div>
+              <dt>Location</dt>
+              <dd>{friendlyLocation(folderPath)}</dd>
+            </div>
+            <div>
+              <dt>Validation</dt>
+              <dd>{isValid ? "Valid" : "Needs review"}</dd>
+            </div>
+            <div>
+              <dt>Skills found</dt>
+              <dd>{inspection.foundSkills.length}</dd>
+            </div>
+          </dl>
+          {!isValid && (
+            <>
+              <IssueGroup issues={validationReport.issues.filter((issue) => issue.severity === "error")} severity="error" />
+              <button className="secondary-button compact-button" onClick={onAddAnyway} type="button">
+                Add to My Kits anyway
+              </button>
+            </>
+          )}
+          <div className="button-row">
+            <button className="primary-button compact-button" disabled={!isValid} onClick={() => onUseKit(folderPath)} type="button">
+              Use Kit
+            </button>
+            <button className="secondary-button compact-button" disabled={!folderPath} onClick={() => onPackageKit(folderPath)} type="button">
+              Package / Export
+            </button>
+            <button className="secondary-button compact-button" disabled={!folderPath} onClick={onOpenFolder} type="button">
+              Open Folder
+            </button>
+          </div>
+          <CandidateInspectionPanel inspection={inspection} title="Folder inspection" compact />
+        </div>
+      )}
+
+      <div className="help-link-row">
+        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
+        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+      </div>
+    </div>
+  );
+}
+
+function ImportGitPanel({
+  error,
+  form,
+  isImporting,
+  isSelectingDestination,
+  onImport,
+  onOpenFolder,
+  onPackageKit,
+  onSelectDestination,
+  onUpdateForm,
+  onUseKit,
+  result,
+}: {
+  error: string | null;
+  form: {
+    repositoryUrl: string;
+    reference: string;
+    destinationRootFolder: string;
+    validationProfile: ValidationProfile;
+  };
+  isImporting: boolean;
+  isSelectingDestination: boolean;
+  onImport: () => void;
+  onOpenFolder: (path: string) => void;
+  onPackageKit: (path: string) => void;
+  onSelectDestination: () => void;
+  onUpdateForm: <Key extends keyof ImportGitPanelProps["form"]>(
+    key: Key,
+    value: ImportGitPanelProps["form"][Key],
+  ) => void;
+  onUseKit: (path: string) => void;
+  result: ImportAgentKitFromGitResult | null;
+}) {
+  const importedPath = result?.importedPath || "";
+  const isValid = Boolean(result?.validationReport?.valid);
+
+  return (
+    <div className="form-panel import-panel">
+      <h2>Import from Git Repository</h2>
+      <p className="form-copy">
+        Import a public repository whose root folder is an Agent Kit. Private repository authentication is not supported in v0.1.
+      </p>
+
+      <LabelWithHelp htmlFor="git-repository-url" label="Git repository URL" help="Use a public HTTPS Git URL from GitHub, GitLab, Bitbucket, or another Git host." />
+      <input
+        id="git-repository-url"
+        onChange={(event) => onUpdateForm("repositoryUrl", event.target.value)}
+        placeholder="https://github.com/example/agent-kit.git"
+        value={form.repositoryUrl}
+      />
+
+      <LabelWithHelp htmlFor="git-reference" label="Branch or ref" help="Optional. Leave blank to import the repository default branch." />
+      <input
+        id="git-reference"
+        onChange={(event) => onUpdateForm("reference", event.target.value)}
+        placeholder="main"
+        value={form.reference}
+      />
+
+      <LabelWithHelp htmlFor="git-import-destination" label="Destination" help="Git imports are copied into the AgentKitForge Library by default." />
+      <div className="friendly-location-row">
+        <span>Destination: {isDefaultKitsFolder(form.destinationRootFolder) ? "AgentKitForge Library" : friendlyLocation(form.destinationRootFolder)}</span>
+        <button className="secondary-button compact-button" disabled={isSelectingDestination || isImporting} onClick={onSelectDestination} type="button">
+          <FolderOpen size={18} />
+          Change destination
+        </button>
+      </div>
+      <details className="advanced-details">
+        <summary>Show folder path</summary>
+        <input
+          id="git-import-destination"
+          onChange={(event) => onUpdateForm("destinationRootFolder", event.target.value)}
+          placeholder="Full destination folder path"
+          value={form.destinationRootFolder}
+        />
+      </details>
+
+      <label htmlFor="git-validation-profile">Validation profile</label>
+      <select
+        id="git-validation-profile"
+        onChange={(event) => onUpdateForm("validationProfile", event.target.value as ValidationProfile)}
+        value={form.validationProfile}
+      >
+        {validationProfiles.map((profile) => (
+          <option key={profile} value={profile}>
+            {profile}
+          </option>
+        ))}
+      </select>
+
+      <button className="primary-button" disabled={isImporting} onClick={onImport} type="button">
+        <GitBranch size={18} />
+        {isImporting ? "Importing" : "Import repository"}
+      </button>
+
+      {error && <div className="error-state" role="alert">{error}</div>}
+
+      {result && !result.inspection.looksLikeAgentKit && (
+        <CandidateInspectionPanel inspection={result.inspection} title="This repository does not look like an Agent Kit." />
+      )}
+
+      {result?.inspection.looksLikeAgentKit && result.validationReport && (
+        <div className="import-result">
+          <div className={`status-banner ${isValid ? "valid" : "invalid"}`}>
+            <strong>{isValid ? "Imported and added to My Kits" : "Imported with issues"}</strong>
+            <span>{result.validationReport.profile}</span>
+          </div>
+          <dl className="report-meta">
+            <div>
+              <dt>Repository</dt>
+              <dd>{friendlyGitRepoLabel(result.repositoryUrl)}</dd>
+            </div>
+            <div>
+              <dt>Kit</dt>
+              <dd>{result.metadata ? `${result.metadata.name} ${result.metadata.version}` : "Imported kit"}</dd>
+            </div>
+            <div>
+              <dt>Location</dt>
+              <dd>{importedPath ? friendlyLocation(importedPath) : "Not imported"}</dd>
+            </div>
+            <div>
+              <dt>Validation</dt>
+              <dd>{isValid ? "Valid" : "Needs review"}</dd>
+            </div>
+          </dl>
+          {importedPath && (
+            <details className="advanced-details">
+              <summary>Advanced details</summary>
+              <dl className="report-meta">
+                <div>
+                  <dt>Full folder path</dt>
+                  <dd>{importedPath}</dd>
+                </div>
+              </dl>
+            </details>
+          )}
+          {!isValid && (
+            <IssueGroup issues={result.validationReport.issues.filter((issue) => issue.severity === "error")} severity="error" />
+          )}
+          <div className="button-row">
+            <button className="primary-button compact-button" disabled={!isValid || !importedPath} onClick={() => onUseKit(importedPath)} type="button">
+              Use Kit
+            </button>
+            <button className="secondary-button compact-button" disabled={!importedPath} onClick={() => onPackageKit(importedPath)} type="button">
+              Package / Export
+            </button>
+            <button className="secondary-button compact-button" disabled={!importedPath} onClick={() => onOpenFolder(importedPath)} type="button">
+              Open Folder
+            </button>
+          </div>
+          <details className="advanced-details">
+            <summary>Imported files</summary>
+            <div className="created-files">
+              <ul>
+                {result.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            </div>
+          </details>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type ImportGitPanelProps = {
+  form: {
+    repositoryUrl: string;
+    reference: string;
+    destinationRootFolder: string;
+    validationProfile: ValidationProfile;
+  };
+};
+
+function CandidateInspectionPanel({
+  compact = false,
+  inspection,
+  title,
+}: {
+  compact?: boolean;
+  inspection: AgentKitCandidateInspection;
+  title: string;
+}) {
+  const hasMissing = inspection.missingRequiredFiles.length > 0 || inspection.missingRequiredFolders.length > 0;
+
+  return (
+    <div className={compact ? "inline-inspection" : "error-state"} role={compact ? undefined : "alert"}>
+      <strong>{title}</strong>
+      <p>{inspection.friendlySummary}</p>
+      {hasMissing && (
+        <div className="inspection-grid">
+          {inspection.missingRequiredFiles.length > 0 && (
+            <div>
+              <h3>Missing files</h3>
+              <ul>
+                {inspection.missingRequiredFiles.map((file) => (
+                  <li key={file}>{friendlyValidationLabel(file)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {inspection.missingRequiredFolders.length > 0 && (
+            <div>
+              <h3>Missing folders</h3>
+              <ul>
+                {inspection.missingRequiredFolders.map((folder) => (
+                  <li key={folder}>{friendlyValidationLabel(folder)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+      {inspection.recommendedFixes.length > 0 && (
+        <div>
+          <h3>Recommended fixes</h3>
+          <ul>
+            {inspection.recommendedFixes.map((fix) => (
+              <li key={fix}>{fix}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <details className="advanced-details">
+        <summary>Advanced details</summary>
+        <dl className="report-meta">
+          <div>
+            <dt>Full folder path</dt>
+            <dd>{inspection.path}</dd>
+          </div>
+          <div>
+            <dt>Files found</dt>
+            <dd>{inspection.foundFiles.length ? inspection.foundFiles.join(", ") : "None"}</dd>
+          </div>
+          <div>
+            <dt>Skills found</dt>
+            <dd>{inspection.foundSkills.length ? inspection.foundSkills.join(", ") : "None"}</dd>
+          </div>
+        </dl>
+      </details>
+    </div>
+  );
+}
+
+function ComingSoonImportPanel({ title }: { title: string }) {
+  return (
+    <div className="form-panel import-panel">
+      <div className="empty-state compact-empty">
+        <PackageOpen size={34} strokeWidth={1.8} />
+        <h2>{title}</h2>
+        <p>This import source is coming later. For v0.1, use a package, folder, or public Git repository.</p>
+      </div>
+      <div className="help-link-row">
+        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
+        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+      </div>
+    </div>
+  );
+}
 
 function BuildScreen({
   onKitReady,
@@ -5672,6 +6157,19 @@ function friendlyLocation(path: string) {
     return path;
   }
   return `${parts[parts.length - 2]} / ${parts[parts.length - 1]}`;
+}
+
+function friendlyGitRepoLabel(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.replace(/^\/+/, "").replace(/\.git$/i, "") || parsed.hostname;
+  } catch {
+    return url.replace(/\.git$/i, "");
+  }
+}
+
+function friendlyValidationLabel(value: string) {
+  return value.replace(/\\/g, "/");
 }
 
 function appKitsFolder(settings: PublicSettings) {

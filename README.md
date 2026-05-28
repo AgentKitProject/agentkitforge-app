@@ -424,6 +424,8 @@ Docs links:
 
 My Kits is a local-only library of Agent Kit folders on this machine. It is for kits you already have. It stores metadata and paths so you can quickly reopen, validate, use, package/export, or install kits without moving or copying the kit folders.
 
+When My Kits has entries, it stays focused on library actions only: use, validate, package/export, install target, open folder, refresh, or remove from the library. Import and add-folder workflows live in the separate **Import** section. If the library is empty, My Kits shows shortcuts for Build with AI, Guided Builder, and Import Agent Kit.
+
 Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. **Remove from My Kits** only removes the local library entry; it does not delete files from disk.
 
 The library is stored in Tauri app-local data as `my-kits.json`. On Windows this is typically under the user's local app data folder for AgentKitForge, alongside `settings.json`. The exact path is resolved by Tauri at runtime.
@@ -437,7 +439,8 @@ Import is separate from My Kits. Use **Import** to bring in kits from elsewhere,
 Import options:
 
 - **From .agentkit.zip**: implemented for portable Agent Kit packages.
-- **From Folder**: adds an existing local Agent Kit folder to My Kits without copying it.
+- **From Folder**: inspects an existing local Agent Kit folder, validates it, and adds valid kits to My Kits without copying it.
+- **From Git Repository**: clones a public HTTPS Git repository, checks that the repository root is an Agent Kit, copies it into the AgentKitForge Library, validates it, and adds valid kits to My Kits.
 - **From Agent Kit Market**: placeholder for later.
 - **From Organization Repository**: placeholder for later.
 
@@ -453,6 +456,10 @@ To import a downloaded or shared `.agentkit.zip` package:
 AgentKitForge extracts the package into a subfolder under the selected destination root, based on the package filename. Import validates the extracted kit immediately. Valid imports are added to My Kits automatically. Invalid imports remain extracted so you can inspect the issues, and you can choose to add them to My Kits anyway.
 
 The importer blocks zip path traversal and refuses to overwrite non-empty folders unless force overwrite is enabled.
+
+To import from a folder, choose the folder that contains `agentkit.yaml`, `AGENTKIT.md`, `START_HERE.md`, and `skills/<skill-id>/SKILL.md`. AgentKitForge uses `agentkitforge-core` candidate inspection to show friendly missing-file and missing-folder explanations instead of raw validation JSON.
+
+To import from Git, use a public HTTPS Git URL from GitHub, GitLab, Bitbucket, or another Git host. You can optionally enter a branch or ref. Private repository authentication is not supported in v0.1. AgentKitForge clones the repository to a temporary folder, inspects only the repository files, and does not execute repository scripts. The Agent Kit files must be at the repository root; otherwise the app explains what is missing and recommends importing the folder that contains the kit.
 
 ## Default App Folders
 
