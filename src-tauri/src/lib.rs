@@ -239,6 +239,29 @@ struct SaveMarkdownFileResult {
     file_path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderPreparedPromptInput {
+    root_path: String,
+    prompt_id: String,
+    input_values: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreparedPromptValidationReport {
+    valid: bool,
+    issues: Vec<ValidationIssue>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenderPreparedPromptResult {
+    prompt: serde_json::Value,
+    validation_report: PreparedPromptValidationReport,
+    rendered_prompt: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KitMetadata {
@@ -346,22 +369,32 @@ fn select_onefile_output_path() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn select_forge_response_output_path() -> Result<Option<String>, String> {
+fn select_forge_response_output_path(file_name: Option<String>) -> Result<Option<String>, String> {
+    let file_name = file_name
+        .map(|name| sanitize_folder_name(name.trim_end_matches(".md")))
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| format!("{name}.md"))
+        .unwrap_or_else(|| "forge-response.md".to_string());
     let file = rfd::FileDialog::new()
         .set_title("Save Forge Response")
         .add_filter("Markdown", &["md"])
-        .set_file_name("forge-response.md")
+        .set_file_name(&file_name)
         .save_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
-fn select_forge_response_text_output_path() -> Result<Option<String>, String> {
+fn select_forge_response_text_output_path(file_name: Option<String>) -> Result<Option<String>, String> {
+    let file_name = file_name
+        .map(|name| sanitize_folder_name(name.trim_end_matches(".txt").trim_end_matches(".md")))
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| format!("{name}.txt"))
+        .unwrap_or_else(|| "agent-kit-output.txt".to_string());
     let file = rfd::FileDialog::new()
         .set_title("Download Forge Response as Text")
         .add_filter("Text", &["txt"])
-        .set_file_name("agent-kit-output.txt")
+        .set_file_name(&file_name)
         .save_file();
 
     Ok(file.map(|path| path.to_string_lossy().into_owned()))
@@ -429,6 +462,76 @@ fn validate_agent_kit<R: Runtime>(
 
     serde_json::from_slice(&output.stdout)
         .map_err(|error| format!("Unable to parse validation report: {error}"))
+}
+
+#[tauri::command]
+fn list_prepared_prompts<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    root_path: String,
+) -> Result<serde_json::Value, String> {
+    let root_path = canonicalize_directory(&root_path)?;
+    let bridge_script = resolve_prepared_prompts_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("list")
+        .arg(&root_path)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to list prepared prompts: {error}"))?;
+
+    parse_node_json_output(output, "Prepared prompt listing")
+}
+
+#[tauri::command]
+fn render_prepared_prompt<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: RenderPreparedPromptInput,
+) -> Result<RenderPreparedPromptResult, String> {
+    let root_path = canonicalize_directory(&input.root_path)?;
+    let prompt_id = clean_required_value("Prepared prompt", &input.prompt_id)?;
+    let input_json = serde_json::to_string(&input.input_values)
+        .map_err(|error| format!("Unable to serialize prepared prompt inputs: {error}"))?;
+    let bridge_script = resolve_prepared_prompts_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("render")
+        .arg(&root_path)
+        .arg(prompt_id)
+        .arg(input_json)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to render prepared prompt: {error}"))?;
+
+    parse_node_json_output(output, "Prepared prompt render")
+}
+
+#[tauri::command]
+fn validate_prepared_prompt_inputs<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    input: RenderPreparedPromptInput,
+) -> Result<RenderPreparedPromptResult, String> {
+    let root_path = canonicalize_directory(&input.root_path)?;
+    let prompt_id = clean_required_value("Prepared prompt", &input.prompt_id)?;
+    let input_json = serde_json::to_string(&input.input_values)
+        .map_err(|error| format!("Unable to serialize prepared prompt inputs: {error}"))?;
+    let bridge_script = resolve_prepared_prompts_bridge(&app)?;
+    let node_command = resolve_node_command()?;
+
+    let output = Command::new(node_command)
+        .arg(&bridge_script)
+        .arg("validate")
+        .arg(&root_path)
+        .arg(prompt_id)
+        .arg(input_json)
+        .current_dir(resolve_command_working_directory(&app))
+        .output()
+        .map_err(|error| format!("Unable to validate prepared prompt inputs: {error}"))?;
+
+    parse_node_json_output(output, "Prepared prompt input validation")
 }
 
 #[tauri::command]
@@ -1182,6 +1285,10 @@ fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
     resolve_backend_script(app, "export-agent-kit-onefile.mjs")
 }
 
+fn resolve_prepared_prompts_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    resolve_backend_script(app, "prepared-prompts.mjs")
+}
+
 fn resolve_package_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "package-agent-kit.mjs")
 }
@@ -1807,6 +1914,25 @@ fn paths_equal(left: &str, right: &str) -> bool {
     }
 }
 
+fn parse_node_json_output<T: for<'de> Deserialize<'de>>(
+    output: std::process::Output,
+    label: &str,
+) -> Result<T, String> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(if detail.is_empty() {
+            format!("{label} failed without output")
+        } else {
+            detail
+        });
+    }
+
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("Unable to parse {label} result: {error}"))
+}
+
 fn now_timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1826,6 +1952,9 @@ pub fn run() {
             select_json_output_path,
             select_agent_kit_package_file,
             validate_agent_kit,
+            list_prepared_prompts,
+            render_prepared_prompt,
+            validate_prepared_prompt_inputs,
             create_agent_kit_from_template,
             export_agent_kit_onefile,
             package_agent_kit,

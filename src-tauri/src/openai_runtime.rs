@@ -18,6 +18,7 @@ pub struct RunAgentKitInput {
     pub include_templates: Option<bool>,
     pub include_workflows: Option<bool>,
     pub include_references: Option<bool>,
+    pub include_prompts: Option<bool>,
     pub max_skills: Option<u32>,
 }
 
@@ -68,6 +69,7 @@ struct ContextBuilderRequest {
     include_templates: bool,
     include_workflows: bool,
     include_references: bool,
+    include_prompts: bool,
     max_skills: Option<u32>,
 }
 
@@ -200,6 +202,7 @@ async fn build_context(
         include_templates: input.include_templates.unwrap_or(true),
         include_workflows: input.include_workflows.unwrap_or(true),
         include_references: input.include_references.unwrap_or(false),
+        include_prompts: input.include_prompts.unwrap_or(true),
         max_skills: input.max_skills,
     };
     let request_json = serde_json::to_string(&request)

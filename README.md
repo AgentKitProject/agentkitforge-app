@@ -246,7 +246,7 @@ Open the Use section to prepare an Agent Kit for ChatGPT, Claude, or another web
 6. Paste the generated starter prompt.
 7. Review the output before relying on it.
 
-The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill and reference sections.
+The export uses `agentkitforge-core` one-file export logic and includes top-level kit instructions plus supported skill, prompt, and reference sections.
 
 Normal views show friendly file names and locations first. Full filesystem paths are available in Advanced details areas when you need to copy or inspect them.
 
@@ -272,19 +272,25 @@ The default model comes from the selected/default provider. You can choose a kno
 To run a kit inside Forge:
 
 1. Open the Use section.
-2. Select a local Agent Kit folder.
-3. Enter the task you want the kit to perform.
-4. Fill any additional required inputs that the kit needs, such as audience, reporting period, project/environment, or source-file notes. File uploads are not implemented yet, so describe required files in the provided field.
-5. Optionally add extra context such as assumptions, notes, or output constraints.
-6. Review the collapsed **Prompt preview** before sending.
-7. Open **Advanced Settings** only when you need context mode, references, max skills, or output token options.
+2. Choose a kit from **My Kits**. Use **Add existing kit** only when the kit is not in your local library yet.
+3. Choose a **Prepared Prompt** if the kit defines one.
+4. Fill the required inputs shown by the prompt, such as audience, reporting period, project/environment, file summary, or desired output type.
+5. Review the collapsed **Prompt Preview** before sending.
+6. Open **Advanced Settings** only when you need additional context, context mode, references, max skills, prompt inclusion, or output token options.
+7. If the kit has no prepared prompts, use the freeform task fallback. Prepared prompts help make repeatable workflows easier, but they are not required.
 8. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
 9. Click **Run with AI**.
 10. Review the response before relying on it.
 
+Prepared Prompts live in the kit's `prompts/` folder. AgentKitForge lists them in friendly form, renders their input fields, validates required values, and sends the rendered prompt as the main task. Supported input types are short text, long text, choice, multi-choice, date, number, and boolean.
+
+Prompt preview shows the final rendered prompt without exposing raw prompt JSON by default. You can expand and copy the preview before running. Additional context, raw details, included files, included skills, and context warnings are kept under Advanced sections.
+
+If a selected prompt marks its output as document-like, **Download as Markdown** is emphasized after the response. Download names use the prompt's `suggestedFileName` when available; otherwise AgentKitForge falls back to a sensible kit-based timestamped name. Plain text download and copy response remain available.
+
 If the kit has `START_HERE.md` or `README.md`, the Use screen shows a bounded, collapsed local hint from that file. You can expand or copy it. This does not call an AI provider.
 
-With **Validate before running** enabled, AgentKitForge validates the selected kit with the chosen validation profile before making the OpenAI request. If validation fails, the run is blocked and the validation issues are shown. Turn the checkbox off only when you deliberately want to test or debug an invalid kit.
+With **Validate before running** enabled, AgentKitForge validates the selected kit with the chosen validation profile before making the AI provider request. If validation fails, the run is blocked and the validation issues are shown. Turn the checkbox off only when you deliberately want to test or debug an invalid kit.
 
 After a response is generated, you can copy it, download it as Markdown, download it as plain text, or clear it from the screen. Saved Markdown includes the response plus run metadata for review.
 
@@ -305,6 +311,7 @@ Include options:
 - Templates: on by default.
 - Workflows: on by default.
 - References: off by default to avoid oversized context.
+- Prepared prompts: on by default.
 
 After a run, expand **Context details** to see included files, included skills, warnings, and approximate context length. Raw JSON, raw paths, base URLs, structured JSON flags, and other technical options are generally behind Advanced sections.
 

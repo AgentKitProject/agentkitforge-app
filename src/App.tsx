@@ -87,6 +87,11 @@ type ValidationReport = {
   issues: ValidationIssue[];
 };
 
+type PromptInputValidationReport = {
+  valid: boolean;
+  issues: ValidationIssue[];
+};
+
 type CreateAgentKitResult = {
   rootPath: string;
   template: AgentKitTemplate;
@@ -216,6 +221,45 @@ type RunAgentKitResult = {
 type AgentKitStarterHint = {
   sourceFile: string;
   excerpt: string;
+};
+
+type PreparedPromptInputType =
+  | "short-text"
+  | "long-text"
+  | "choice"
+  | "multi-choice"
+  | "date"
+  | "number"
+  | "boolean";
+
+type PreparedPromptInput = {
+  id: string;
+  label: string;
+  description?: string;
+  type: PreparedPromptInputType;
+  required: boolean;
+  placeholder?: string;
+  defaultValue?: unknown;
+  choices?: string[];
+  includeInPrompt?: boolean;
+};
+
+type PreparedPrompt = {
+  id: string;
+  name: string;
+  description: string;
+  template: string;
+  inputs: PreparedPromptInput[];
+  outputMode?: "text" | "markdown" | "document";
+  documentLikeOutput?: boolean;
+  suggestedFileName?: string;
+  tags?: string[];
+};
+
+type PreparedPromptRenderResult = {
+  prompt: PreparedPrompt;
+  validationReport: PromptInputValidationReport;
+  renderedPrompt?: string | null;
 };
 
 type AgentKitContextMode = "all" | "triggered";
@@ -2551,6 +2595,15 @@ function UseScreen({
   settings: PublicSettings;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
+  const [myKits, setMyKits] = useState<MyKitEntry[]>([]);
+  const [preparedPrompts, setPreparedPrompts] = useState<PreparedPrompt[]>([]);
+  const [selectedPromptId, setSelectedPromptId] = useState("");
+  const [preparedPromptInputs, setPreparedPromptInputs] = useState<Record<string, unknown>>({});
+  const [renderedPreparedPrompt, setRenderedPreparedPrompt] = useState("");
+  const [promptValidationReport, setPromptValidationReport] = useState<PromptInputValidationReport | null>(null);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
+  const [isRenderingPrompt, setIsRenderingPrompt] = useState(false);
   const [userTask, setUserTask] = useState("");
   const [additionalContext, setAdditionalContext] = useState("");
   const [requiredInputs, setRequiredInputs] = useState<RequiredInputFields>({
@@ -2571,6 +2624,7 @@ function UseScreen({
   const [includeTemplates, setIncludeTemplates] = useState(settings.includeTemplates);
   const [includeWorkflows, setIncludeWorkflows] = useState(settings.includeWorkflows);
   const [includeReferences, setIncludeReferences] = useState(settings.includeReferences);
+  const [includePrompts, setIncludePrompts] = useState(true);
   const [maxSkills, setMaxSkills] = useState("");
   const [runResult, setRunResult] = useState<RunAgentKitResult | null>(null);
   const [runCompletedAt, setRunCompletedAt] = useState<string | null>(null);
@@ -2597,10 +2651,17 @@ function UseScreen({
   const [isExporting, setIsExporting] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [resultCopyState, setResultCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const selectedPrompt = preparedPrompts.find((prompt) => prompt.id === selectedPromptId);
 
   useEffect(() => {
     setKitPath(currentKitPath);
   }, [currentKitPath]);
+
+  useEffect(() => {
+    invoke<MyKitEntry[]>("list_my_kits")
+      .then((kits) => setMyKits(kits.filter((kit) => kit.pathExists)))
+      .catch(() => setMyKits([]));
+  }, []);
 
   useEffect(() => {
     const provider = getSelectedProvider(settings, providerId);
@@ -2614,6 +2675,87 @@ function UseScreen({
     setIncludeReferences(settings.includeReferences);
     setOutputPath((current) => current || settings.defaultOutputFolder);
   }, [settings]);
+
+  useEffect(() => {
+    const trimmedPath = kitPath.trim();
+    setPreparedPrompts([]);
+    setSelectedPromptId("");
+    setPreparedPromptInputs({});
+    setRenderedPreparedPrompt("");
+    setPromptValidationReport(null);
+    setPromptError(null);
+
+    if (!trimmedPath) {
+      return;
+    }
+
+    let isCurrent = true;
+    setIsLoadingPrompts(true);
+    invoke<PreparedPrompt[]>("list_prepared_prompts", { rootPath: trimmedPath })
+      .then((prompts) => {
+        if (!isCurrent) {
+          return;
+        }
+        setPreparedPrompts(prompts);
+        setSelectedPromptId(prompts[0]?.id ?? "");
+        setPreparedPromptInputs(defaultPreparedPromptInputs(prompts[0]));
+      })
+      .catch((caughtError) => {
+        if (isCurrent) {
+          setPromptError(errorToMessage(caughtError));
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsLoadingPrompts(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [kitPath]);
+
+  useEffect(() => {
+    if (!selectedPrompt || !kitPath.trim()) {
+      setRenderedPreparedPrompt("");
+      setPromptValidationReport(null);
+      return;
+    }
+
+    let isCurrent = true;
+    setIsRenderingPrompt(true);
+    setPromptError(null);
+    invoke<PreparedPromptRenderResult>("render_prepared_prompt", {
+      input: {
+        rootPath: kitPath,
+        promptId: selectedPrompt.id,
+        inputValues: preparedPromptInputs,
+      },
+    })
+      .then((result) => {
+        if (!isCurrent) {
+          return;
+        }
+        setPromptValidationReport(result.validationReport);
+        setRenderedPreparedPrompt(result.renderedPrompt ?? "");
+      })
+      .catch((caughtError) => {
+        if (isCurrent) {
+          setPromptError(errorToMessage(caughtError));
+          setRenderedPreparedPrompt("");
+        }
+      })
+      .finally(() => {
+        if (isCurrent) {
+          setIsRenderingPrompt(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [kitPath, selectedPromptId, preparedPromptInputs]);
 
   useEffect(() => {
     const trimmedPath = kitPath.trim();
@@ -2657,7 +2799,7 @@ function UseScreen({
     try {
       const selectedPath = await invoke<string | null>("select_agent_kit_folder");
       if (selectedPath) {
-        setKitPath(selectedPath);
+        updateSelectedUseKitPath(selectedPath);
         onKitPathChange(selectedPath);
         setResult(null);
         setRunResult(null);
@@ -2673,8 +2815,31 @@ function UseScreen({
     }
   }
 
+  function updateSelectedUseKitPath(path: string) {
+    setKitPath(path);
+    setResult(null);
+    setRunResult(null);
+    setFieldErrors((current) => ({ ...current, kitPath: undefined }));
+    setRunFieldErrors((current) => ({ ...current, kitPath: undefined }));
+  }
+
+  function choosePreparedPrompt(promptId: string) {
+    const prompt = preparedPrompts.find((entry) => entry.id === promptId);
+    setSelectedPromptId(promptId);
+    setPreparedPromptInputs(defaultPreparedPromptInputs(prompt));
+    setRunResult(null);
+    setRunError(null);
+  }
+
+  function updatePreparedPromptInput(input: PreparedPromptInput, value: unknown) {
+    setPreparedPromptInputs((current) => ({ ...current, [input.id]: value }));
+    setRunResult(null);
+    setRunError(null);
+  }
+
   async function runInsideForge() {
-    const validationErrors = validateRunForm(settings, providerId, kitPath, userTask);
+    const taskForRun = selectedPrompt ? renderedPreparedPrompt : userTask;
+    const validationErrors = validateRunForm(settings, providerId, kitPath, taskForRun);
     setRunFieldErrors(validationErrors);
     setRunError(null);
     setRunResult(null);
@@ -2684,6 +2849,11 @@ function UseScreen({
     setResultCopyState("idle");
 
     if (Object.keys(validationErrors).length > 0) {
+      return;
+    }
+
+    if (selectedPrompt && promptValidationReport && !promptValidationReport.valid) {
+      setRunError("Complete the required prompt inputs before running.");
       return;
     }
 
@@ -2708,7 +2878,7 @@ function UseScreen({
       const runtimeResult = await invoke<RunAgentKitResult>("run_agent_kit_with_ai", {
         input: {
           kitPath,
-          userTask,
+          userTask: taskForRun,
           additionalContext: combineAdditionalContext(requiredInputs, additionalContext),
           providerId,
           model,
@@ -2719,6 +2889,7 @@ function UseScreen({
           includeTemplates,
           includeWorkflows,
           includeReferences,
+          includePrompts,
           maxSkills: contextMode === "triggered" ? Number.parseInt(maxSkills, 10) || undefined : undefined,
         },
       });
@@ -2826,7 +2997,9 @@ function UseScreen({
     setRunError(null);
 
     try {
-      const selectedPath = await invoke<string | null>("select_forge_response_output_path");
+      const selectedPath = await invoke<string | null>("select_forge_response_output_path", {
+        fileName: responseDownloadName(selectedPrompt, kitPath, "md"),
+      });
       if (!selectedPath) {
         return;
       }
@@ -2861,7 +3034,9 @@ function UseScreen({
     setRunError(null);
 
     try {
-      const selectedPath = await invoke<string | null>("select_forge_response_text_output_path");
+      const selectedPath = await invoke<string | null>("select_forge_response_text_output_path", {
+        fileName: responseDownloadName(selectedPrompt, kitPath, "txt"),
+      });
       if (!selectedPath) {
         return;
       }
@@ -2899,25 +3074,36 @@ function UseScreen({
             <div className="inline-warning">Add an AI provider in Settings before running.</div>
           )}
 
-          <label htmlFor="runtime-kit">Select kit folder</label>
+          <LabelWithHelp
+            htmlFor="runtime-kit"
+            label="Select Agent Kit"
+            help="Choose from My Kits first. Add an existing folder only when the kit is not in your library yet."
+          />
           <div className="path-picker">
-            <input
+            <select
               id="runtime-kit"
               onChange={(event) => {
                 const nextPath = event.target.value;
-                setKitPath(nextPath);
+                updateSelectedUseKitPath(nextPath);
                 onKitPathChange(nextPath);
-                setRunResult(null);
-                setResult(null);
               }}
-              placeholder="Choose an Agent Kit"
               value={kitPath}
-            />
+            >
+              <option value="">Choose from My Kits</option>
+              {myKits.map((kit) => (
+                <option key={kit.path} value={kit.path}>
+                  {kit.name} ({kit.version})
+                </option>
+              ))}
+              {kitPath && !myKits.some((kit) => pathsEqualLoose(kit.path, kitPath)) && (
+                <option value={kitPath}>{friendlyLocation(kitPath)}</option>
+              )}
+            </select>
             <button
               className="icon-button"
               disabled={isSelectingKit || isRunning || isExporting}
               onClick={selectKitFolder}
-              title="Select kit folder"
+              title="Add existing kit"
               type="button"
             >
               <FolderOpen size={18} />
@@ -2951,22 +3137,47 @@ function UseScreen({
           </select>
           <FieldError message={runFieldErrors.providerId} />
 
-          <LabelWithHelp
-            htmlFor="runtime-task"
-            label="Task"
-            help="Describe what you need. The kit instructions and the details below will be included before sending."
+          <PreparedPromptSelector
+            isLoading={isLoadingPrompts}
+            onSelectPrompt={choosePreparedPrompt}
+            prompts={preparedPrompts}
+            selectedPromptId={selectedPromptId}
           />
-          <textarea
-            id="runtime-task"
-            onChange={(event) => {
-              setUserTask(event.target.value);
-              setRunResult(null);
-            }}
-            placeholder="Describe the specific work you want this kit to perform. Include the desired output, audience, and any constraints."
-            rows={6}
-            value={userTask}
-          />
-          <FieldError message={runFieldErrors.userTask} />
+
+          {selectedPrompt ? (
+            <PreparedPromptInputFields
+              inputs={selectedPrompt.inputs}
+              onChange={updatePreparedPromptInput}
+              values={preparedPromptInputs}
+            />
+          ) : (
+            <>
+              <div className="inline-warning">
+                This kit does not define prepared prompts yet. Prepared prompts help make repeatable workflows easier.
+              </div>
+              <LabelWithHelp
+                htmlFor="runtime-task"
+                label="Freeform task"
+                help="Describe what you need. The kit instructions and your task will be sent to the selected provider."
+              />
+              <textarea
+                id="runtime-task"
+                onChange={(event) => {
+                  setUserTask(event.target.value);
+                  setRunResult(null);
+                }}
+                placeholder="Describe the specific work you want this kit to perform. Include the desired output, audience, and any constraints."
+                rows={6}
+                value={userTask}
+              />
+              <FieldError message={runFieldErrors.userTask} />
+            </>
+          )}
+
+          {promptValidationReport && !promptValidationReport.valid && (
+            <IssueGroup issues={promptValidationReport.issues} severity="error" />
+          )}
+          {promptError && <div className="error-state" role="alert">{promptError}</div>}
 
           <StarterHintPanel
             error={starterHintError}
@@ -2974,7 +3185,7 @@ function UseScreen({
             isLoading={isLoadingStarterHint}
           />
 
-          <div className="required-inputs-panel">
+          {!selectedPrompt && <div className="required-inputs-panel">
             <div className="panel-heading">
               <h3>Additional required inputs</h3>
               <HelpTip text="Some kits need details such as audience, time period, project, or source-file notes. Add those here before running." />
@@ -3025,19 +3236,7 @@ function UseScreen({
               rows={3}
               value={requiredInputs.other}
             />
-          </div>
-
-          <label htmlFor="runtime-context">Additional context</label>
-          <textarea
-            id="runtime-context"
-            onChange={(event) => {
-              setAdditionalContext(event.target.value);
-              setRunResult(null);
-            }}
-            placeholder="Optional details such as source notes, assumptions, examples, or review criteria."
-            rows={4}
-            value={additionalContext}
-          />
+          </div>}
 
           <LabelWithHelp
             htmlFor="runtime-model"
@@ -3053,6 +3252,21 @@ function UseScreen({
 
           <details className="advanced-details">
             <summary>Advanced Settings</summary>
+          <LabelWithHelp
+            htmlFor="runtime-context"
+            label="Additional context"
+            help="Optional details to include after the prepared prompt, such as notes or constraints."
+          />
+          <textarea
+            id="runtime-context"
+            onChange={(event) => {
+              setAdditionalContext(event.target.value);
+              setRunResult(null);
+            }}
+            placeholder="Optional details such as source notes, assumptions, examples, or review criteria."
+            rows={4}
+            value={additionalContext}
+          />
           <div className="settings-grid two-column">
             <div>
               <label htmlFor="runtime-context-mode">Context mode</label>
@@ -3158,6 +3372,15 @@ function UseScreen({
               />
               <span>Include references</span>
             </label>
+            <label className="checkbox-row" htmlFor="include-prompts">
+              <input
+                checked={includePrompts}
+                id="include-prompts"
+                onChange={(event) => setIncludePrompts(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Include prepared prompts</span>
+            </label>
           </div>
 
           <label htmlFor="runtime-max-output">Max output tokens</label>
@@ -3172,7 +3395,10 @@ function UseScreen({
 
           <PromptPreview
             additionalContext={additionalContext}
+            preparedPrompt={selectedPrompt}
             requiredInputs={requiredInputs}
+            renderedPrompt={renderedPreparedPrompt}
+            isRendering={isRenderingPrompt}
             userTask={userTask}
           />
 
@@ -3191,6 +3417,7 @@ function UseScreen({
           <div className="panel-label">Forge Result</div>
           <ForgeRunResults
             copyState={resultCopyState}
+            documentLikeOutput={selectedPrompt?.documentLikeOutput === true}
             error={runError}
             isLoading={isRunning}
             isSavingResponse={isSavingResponse}
@@ -4142,6 +4369,7 @@ function PackageExportResults({
 
 function ForgeRunResults({
   copyState,
+  documentLikeOutput,
   error,
   isLoading,
   isSavingResponse,
@@ -4158,6 +4386,7 @@ function ForgeRunResults({
   validationProfile,
 }: {
   copyState: "idle" | "copied" | "failed";
+  documentLikeOutput: boolean;
   error: string | null;
   isLoading: boolean;
   isSavingResponse: boolean;
@@ -4174,7 +4403,7 @@ function ForgeRunResults({
   validationProfile: ValidationProfile;
 }) {
   if (isLoading) {
-    return <p className="state-copy">Validating the kit and running it with OpenAI...</p>;
+    return <p className="state-copy">Validating the kit and running it with the selected AI provider...</p>;
   }
 
   if (error && !result) {
@@ -4213,7 +4442,7 @@ function ForgeRunResults({
             Copy response
           </button>
           <button
-            className="secondary-button compact-button"
+            className={`${documentLikeOutput ? "primary-button" : "secondary-button"} compact-button`}
             disabled={isSavingResponse}
             onClick={onSaveResult}
             type="button"
@@ -4399,23 +4628,205 @@ function RunMetadata({
   );
 }
 
+function PreparedPromptSelector({
+  isLoading,
+  onSelectPrompt,
+  prompts,
+  selectedPromptId,
+}: {
+  isLoading: boolean;
+  onSelectPrompt: (promptId: string) => void;
+  prompts: PreparedPrompt[];
+  selectedPromptId: string;
+}) {
+  if (isLoading) {
+    return <p className="state-copy compact-state">Loading prepared prompts...</p>;
+  }
+
+  if (prompts.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="prepared-prompt-panel">
+      <LabelWithHelp
+        htmlFor="prepared-prompt"
+        label="Prepared Prompt"
+        help="Prepared prompts are reusable workflows from the kit. Choose one, fill the fields, preview, then run."
+      />
+      <select
+        id="prepared-prompt"
+        onChange={(event) => onSelectPrompt(event.target.value)}
+        value={selectedPromptId}
+      >
+        {prompts.map((prompt) => (
+          <option key={prompt.id} value={prompt.id}>
+            {prompt.name}
+          </option>
+        ))}
+      </select>
+      {prompts.find((prompt) => prompt.id === selectedPromptId) && (
+        <p className="form-copy">
+          {prompts.find((prompt) => prompt.id === selectedPromptId)?.description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PreparedPromptInputFields({
+  inputs,
+  onChange,
+  values,
+}: {
+  inputs: PreparedPromptInput[];
+  onChange: (input: PreparedPromptInput, value: unknown) => void;
+  values: Record<string, unknown>;
+}) {
+  if (inputs.length === 0) {
+    return <p className="state-copy compact-state">This prepared prompt does not need additional inputs.</p>;
+  }
+
+  return (
+    <div className="required-inputs-panel">
+      <div className="panel-heading">
+        <h3>Required Inputs</h3>
+        <HelpTip text="Fill the fields this prepared prompt needs. Required fields must be completed before running." />
+      </div>
+      {inputs.map((input) => (
+        <PreparedPromptInputField
+          input={input}
+          key={input.id}
+          onChange={(value) => onChange(input, value)}
+          value={values[input.id] ?? input.defaultValue ?? defaultValueForPromptInput(input)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PreparedPromptInputField({
+  input,
+  onChange,
+  value,
+}: {
+  input: PreparedPromptInput;
+  onChange: (value: unknown) => void;
+  value: unknown;
+}) {
+  const label = `${input.label}${input.required ? " *" : ""}`;
+  const id = `prompt-input-${input.id}`;
+
+  return (
+    <div className="prompt-input-field">
+      <LabelWithHelp
+        htmlFor={id}
+        label={label}
+        help={input.description || "This value will be used to render the prepared prompt."}
+      />
+      {input.type === "long-text" && (
+        <textarea
+          id={id}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={input.placeholder}
+          rows={4}
+          value={typeof value === "string" ? value : ""}
+        />
+      )}
+      {["short-text", "date"].includes(input.type) && (
+        <input
+          id={id}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={input.placeholder}
+          type={input.type === "date" ? "date" : "text"}
+          value={typeof value === "string" ? value : ""}
+        />
+      )}
+      {input.type === "number" && (
+        <input
+          id={id}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={input.placeholder}
+          type="number"
+          value={typeof value === "number" || typeof value === "string" ? value : ""}
+        />
+      )}
+      {input.type === "boolean" && (
+        <label className="checkbox-row" htmlFor={id}>
+          <input
+            checked={value === true}
+            id={id}
+            onChange={(event) => onChange(event.target.checked)}
+            type="checkbox"
+          />
+          <span>{input.placeholder || "Yes"}</span>
+        </label>
+      )}
+      {input.type === "choice" && (
+        <select id={id} onChange={(event) => onChange(event.target.value)} value={typeof value === "string" ? value : ""}>
+          <option value="">Choose one</option>
+          {(input.choices ?? []).map((choice) => (
+            <option key={choice} value={choice}>
+              {choice}
+            </option>
+          ))}
+        </select>
+      )}
+      {input.type === "multi-choice" && (
+        <div className="checkbox-grid">
+          {(input.choices ?? []).map((choice) => {
+            const selected = Array.isArray(value) ? value.includes(choice) : false;
+            return (
+              <label className="checkbox-row" key={choice}>
+                <input
+                  checked={selected}
+                  onChange={(event) => {
+                    const current = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+                    onChange(event.target.checked ? [...current, choice] : current.filter((item) => item !== choice));
+                  }}
+                  type="checkbox"
+                />
+                <span>{choice}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PromptPreview({
   additionalContext,
+  isRendering,
+  preparedPrompt,
   requiredInputs,
+  renderedPrompt,
   userTask,
 }: {
   additionalContext: string;
+  isRendering?: boolean;
+  preparedPrompt?: PreparedPrompt;
   requiredInputs: RequiredInputFields;
+  renderedPrompt?: string;
   userTask: string;
 }) {
-  const preview = buildPlannedPrompt(userTask, requiredInputs, additionalContext);
+  const preview = preparedPrompt
+    ? renderedPrompt || ""
+    : buildPlannedPrompt(userTask, requiredInputs, additionalContext);
   return (
     <details className="context-details prompt-preview">
-      <summary>Prompt preview</summary>
+      <summary>Prompt Preview</summary>
       <p className="form-copy">
-        This is the user-facing request AgentKitForge will combine with the selected kit context.
+        {preparedPrompt
+          ? "This is the prepared prompt after your inputs are filled in."
+          : "This is the user-facing request AgentKitForge will combine with the selected kit context."}
       </p>
-      <pre className="json-panel">{preview || "Add a task to preview the planned prompt."}</pre>
+      {isRendering ? (
+        <p className="state-copy compact-state">Rendering prompt preview...</p>
+      ) : (
+        <pre className="json-panel">{preview || "Fill required inputs to preview the prompt."}</pre>
+      )}
     </details>
   );
 }
@@ -4456,6 +4867,47 @@ function formatRequiredInputs(requiredInputs: RequiredInputFields) {
   return `Additional required inputs:\n${rows
     .map(([label, value]) => `- ${label}: ${value.trim()}`)
     .join("\n")}`;
+}
+
+function defaultValueForPromptInput(input: PreparedPromptInput): unknown {
+  if (input.defaultValue !== undefined) {
+    return input.defaultValue;
+  }
+
+  if (input.type === "boolean") {
+    return false;
+  }
+
+  if (input.type === "multi-choice") {
+    return [];
+  }
+
+  return "";
+}
+
+function defaultPreparedPromptInputs(prompt?: PreparedPrompt) {
+  if (!prompt) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    prompt.inputs.map((input) => [input.id, defaultValueForPromptInput(input)]),
+  );
+}
+
+function pathsEqualLoose(left: string, right: string) {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function normalizePathForCompare(path: string) {
+  return path.trim().replace(/[\\/]+/g, "/").replace(/\/+$/g, "").toLowerCase();
+}
+
+function responseDownloadName(prompt: PreparedPrompt | undefined, kitPath: string, extension: "md" | "txt") {
+  const baseName = prompt?.suggestedFileName?.trim() || `${slugify(friendlyFileName(kitPath)) || "agent-kit"}-output`;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const withTimestamp = prompt?.suggestedFileName?.trim() ? baseName : `${baseName}-${timestamp}`;
+  return withTimestamp.toLowerCase().endsWith(`.${extension}`) ? withTimestamp : `${withTimestamp}.${extension}`;
 }
 
 function friendlyFileName(path: string) {
