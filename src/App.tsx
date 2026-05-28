@@ -38,6 +38,7 @@ type ThemeMode = "light" | "dark";
 type BuildTabId = "ai" | "guided" | "template" | "draft" | "edit-ai" | "guided-edit";
 type BuildModeGroup = "Create New" | "Edit Existing";
 type ImportTabId = "zip" | "folder" | "git" | "market" | "org";
+type InstallTargetTab = "codex" | "claude-code";
 type UsePromptMode = "prepared" | "custom";
 
 type AiProviderConfig = {
@@ -520,20 +521,20 @@ const buildModes: {
     bestFor: "Careful manual edits",
   },
 ];
-const guidedSteps: { id: GuidedBuilderStep; label: string }[] = [
+const guidedSteps: { id: GuidedBuilderStep; label: string; badge?: "Required" | "Recommended" | "Optional" }[] = [
   { id: "basics", label: "Basics" },
   { id: "skills", label: "Skills" },
-  { id: "policies", label: "Policies - Optional" },
-  { id: "outputs", label: "Outputs / Templates - Optional" },
-  { id: "prompts", label: "Prepared Prompts" },
-  { id: "examples", label: "Examples - Optional" },
+  { id: "policies", label: "Policies", badge: "Optional" },
+  { id: "outputs", label: "Outputs / Templates", badge: "Optional" },
+  { id: "prompts", label: "Prepared Prompts", badge: "Recommended" },
+  { id: "examples", label: "Examples", badge: "Optional" },
   { id: "review", label: "Review & Create" },
 ];
-const requiredBuildSections = ["basics", "skills", "preparedPrompts"];
+const requiredBuildSections = ["basics", "skills"];
 const buildSectionOptions = [
   { id: "basics", label: "Basics", required: true, help: "Kit name, description, domain, and target users." },
   { id: "skills", label: "Skills", required: true, help: "The tasks this Agent Kit can perform." },
-  { id: "preparedPrompts", label: "Prepared Prompts", required: true, help: "Reusable prompts users can run later." },
+  { id: "preparedPrompts", label: "Prepared Prompts", recommended: true, help: "Reusable prompts users can run later. Recommended, but custom prompts still work without them." },
   { id: "policies", label: "Policies", help: "Guardrails for what the AI should avoid, require, or escalate." },
   { id: "templates", label: "Templates / Outputs", help: "Expected output shapes and reusable templates." },
   { id: "examples", label: "Examples", help: "Good prompt and output examples." },
@@ -2457,10 +2458,7 @@ function BuildScreen({
   function removeGuidedPreparedPrompt(index: number) {
     setGuidedForm((current) => ({
       ...current,
-      preparedPrompts:
-        current.preparedPrompts.length > 1
-          ? current.preparedPrompts.filter((_, promptIndex) => promptIndex !== index)
-          : current.preparedPrompts,
+      preparedPrompts: current.preparedPrompts.filter((_, promptIndex) => promptIndex !== index),
     }));
   }
 
@@ -3714,7 +3712,7 @@ function BuildSectionSelector({
         <LabelWithHelp
           htmlFor="build-section-selector"
           label="Sections to include"
-          help="Required sections are always included. Optional sections tell the AI what to add or avoid unless necessary."
+          help="Basics and Skills are required. Prepared Prompts are recommended, and other sections are optional."
         />
       </div>
       <div className="section-chip-grid">
@@ -3731,6 +3729,7 @@ function BuildSectionSelector({
               <span>
                 {section.label}
                 {section.required && <em>Required</em>}
+                {section.recommended && <em>Recommended</em>}
                 {section.advanced && <em>Advanced</em>}
                 <small>{section.help}</small>
               </span>
@@ -3916,8 +3915,11 @@ function GuidedBuilder({
             onClick={() => onStepChange(item.id)}
             type="button"
           >
-            <span>{index + 1}</span>
-            {item.label}
+            <span className="step-index">{index + 1}</span>
+            <span className="step-label">
+              {item.label}
+              {item.badge && <em className={`step-badge ${item.badge.toLowerCase()}`}>{item.badge}</em>}
+            </span>
           </button>
         ))}
       </div>
@@ -3925,8 +3927,9 @@ function GuidedBuilder({
       <div className="build-layout">
         <div className="form-panel guided-builder-panel">
           <div className="guided-requirements-summary">
-            <strong>Required:</strong> Basics, at least one Skill, and at least one Prepared Prompt.
-            <span>Optional: Policies, Templates, and Examples.</span>
+            <strong>Required:</strong> Basics and at least one Skill.
+            <span>Recommended: Prepared Prompts for repeatable tasks.</span>
+            <span>Optional: Policies, Templates, Examples, Workflows, References, Evals, and Scripts.</span>
           </div>
 
           {step === "basics" && (
@@ -4025,6 +4028,7 @@ function GuidedBuilder({
                 </div>
               </div>
               <p className="form-copy">Policies are guardrails that tell the AI what to avoid, require, or escalate.</p>
+              <p className="form-copy">This step is optional. You can skip it and still create a valid Agent Kit.</p>
               {isRiskyGuidedDomain(form.domain) && form.guardrails.length === 0 && (
                 <div className="inline-warning">This domain often benefits from policies. Add a preset or custom policy before sharing the kit.</div>
               )}
@@ -4041,6 +4045,7 @@ function GuidedBuilder({
           {step === "outputs" && (
             <>
               <h2>Outputs / Templates <span className="metadata-pill">Optional</span></h2>
+              <p className="form-copy">This step is optional. You can skip it and still create a valid Agent Kit.</p>
               <LabelWithHelp htmlFor="guided-output-sections" label="Expected output sections" help="List the sections users should usually receive." />
               <textarea id="guided-output-sections" onChange={(event) => onUpdate("outputSections", event.target.value)} rows={4} value={form.outputSections} />
               <label>Optional output template</label>
@@ -4059,15 +4064,21 @@ function GuidedBuilder({
           {step === "prompts" && (
             <>
               <div className="panel-heading">
-                <h2>Prepared Prompts</h2>
+                <h2>Prepared Prompts <span className="metadata-pill recommended">Recommended</span></h2>
                 <button className="secondary-button compact-button" onClick={onAddPrompt} type="button">Add prompt</button>
               </div>
-              <p className="form-copy">Prepared Prompts are reusable prompt templates that users can run later in Use mode. At least one is required.</p>
+              <p className="form-copy">Prepared prompts are recommended for repeatable tasks, but not required. You can still use this kit with a custom prompt.</p>
+              {form.preparedPrompts.length === 0 && (
+                <div className="compact-empty">
+                  <strong>No prepared prompts yet</strong>
+                  <p>Add one if users will run the same task repeatedly. You can skip this step for custom-prompt use.</p>
+                </div>
+              )}
               {form.preparedPrompts.map((prompt, index) => (
                 <article className="guided-card" key={`${prompt.id}-${index}`}>
                   <div className="panel-heading">
                     <h3>Prepared Prompt {index + 1}</h3>
-                    <button className="secondary-button compact-button" disabled={form.preparedPrompts.length === 1} onClick={() => onRemovePrompt(index)} type="button">Remove</button>
+                    <button className="secondary-button compact-button" onClick={() => onRemovePrompt(index)} type="button">Remove</button>
                   </div>
                   <GuidedPromptEditor
                     onAddInput={(seed) => onAddPromptInput(index, seed)}
@@ -4088,6 +4099,7 @@ function GuidedBuilder({
                 <button className="secondary-button compact-button" onClick={onAddExample} type="button">Add example</button>
               </div>
               <p className="form-copy">Examples show users and AI tools what good prompts and outputs look like. They help with sharing, testing, and future marketplace listings.</p>
+              <p className="form-copy">This step is optional. You can skip it and still create a valid Agent Kit.</p>
               {form.examples.map((example, index) => (
                 <article className="guided-card" key={`${example.id}-${index}`}>
                   <div className="panel-heading">
@@ -5743,6 +5755,7 @@ function InstallTargetsScreen({
   onKitPathChange: (path: string) => void;
 }) {
   const [kitPath, setKitPath] = useState(currentKitPath);
+  const [activeInstallTarget, setActiveInstallTarget] = useState<InstallTargetTab>("codex");
   const [myKits, setMyKits] = useState<MyKitEntry[]>([]);
   const [destinationSkillsDir, setDestinationSkillsDir] = useState(() =>
     window.localStorage.getItem("agentkitforge.codexSkillsDestination") ?? "",
@@ -5957,13 +5970,34 @@ function InstallTargetsScreen({
           Export Agent Kits into local agent tools like Codex or Claude Code. AgentKitForge copies files into
           the target tool folder; it does not launch or verify the external tool.
         </p>
+        <div className="tab-list install-target-tabs" role="tablist" aria-label="Install target">
+          <button
+            aria-selected={activeInstallTarget === "codex"}
+            className={`tab-button ${activeInstallTarget === "codex" ? "active" : ""}`}
+            onClick={() => setActiveInstallTarget("codex")}
+            role="tab"
+            type="button"
+          >
+            Codex
+          </button>
+          <button
+            aria-selected={activeInstallTarget === "claude-code"}
+            className={`tab-button ${activeInstallTarget === "claude-code" ? "active" : ""}`}
+            onClick={() => setActiveInstallTarget("claude-code")}
+            role="tab"
+            type="button"
+          >
+            Claude Code
+          </button>
+        </div>
       </section>
+
+      {activeInstallTarget === "codex" && (
       <div className="build-layout">
         <div className="form-panel">
           <h2>Export to Codex</h2>
           <p className="form-copy">
-            Codex needs skills in its own skills folder. AgentKitForge copies this kit's skills there
-            so Codex can discover them.
+            Export this kit's skills into a Codex skills folder so Codex can discover them.
           </p>
           <p className="form-copy">
             AgentKitForge does not launch Codex or verify Codex loaded the skills.
@@ -6059,13 +6093,14 @@ function InstallTargetsScreen({
           />
         </div>
       </div>
+      )}
 
+      {activeInstallTarget === "claude-code" && (
       <div className="build-layout">
         <div className="form-panel">
           <h2>Export to Claude Code</h2>
           <p className="form-copy">
-            Claude Code uses plugin-style folders. AgentKitForge exports this kit as a Claude Code
-            plugin-style package.
+            Export this kit as a Claude Code plugin-style folder.
           </p>
           <p className="form-copy">
             AgentKitForge does not launch Claude Code or verify Claude Code loaded the plugin.
@@ -6162,6 +6197,7 @@ function InstallTargetsScreen({
           />
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -7616,9 +7652,6 @@ function validateGuidedBuilder(form: GuidedBuilderState) {
     }
   }
   const validPrompts = form.preparedPrompts.filter((prompt) => prompt.name.trim() && prompt.template.trim());
-  if (validPrompts.length === 0) {
-    return "Add at least one Prepared Prompt with a name and prompt template.";
-  }
   for (const prompt of validPrompts) {
     const missingInputs = extractPromptVariables(prompt.template).filter((variable) =>
       !prompt.inputs.some((input) => input.id === variable && input.label.trim()),
@@ -7778,9 +7811,9 @@ ${form.description}
 
 Use this kit for ${form.domain || "general business"} work with ${form.targetUsers || "the intended users"}.
 
-Start by choosing a prepared prompt:
+Start by choosing a prepared prompt when one is available, or write a custom prompt:
 
-${promptList || "- The user's task and any relevant context."}
+${promptList || "- Write a custom prompt with the user's task and any relevant context."}
 `;
 }
 

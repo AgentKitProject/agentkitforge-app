@@ -141,15 +141,15 @@ The flow has seven steps:
 
 1. **Basics**: kit name, auto-generated kit ID, description, domain, target users, validation level, and save location.
 2. **Skills**: add repeatable skills with triggers, use guidance, procedure steps, required context, output expectations, and risk level.
-3. **Policies - Optional**: add domain presets or custom policies. Policies are guardrails that tell the AI what to avoid, require, or escalate. Presets cover finance/accounting, legal, healthcare/medical, DevOps/SRE, cloud/infrastructure, security, compliance, HR/recruiting, and general business.
-4. **Outputs / Templates - Optional**: define expected output sections, optional output template, whether the result is document-like, suggested download name, and summary style.
-5. **Prepared Prompts**: define reusable prompt templates users can run later in Use mode.
-6. **Examples - Optional**: add example prompts, example input values, and expected outputs.
+3. **Policies**: optional guardrails that tell the AI what to avoid, require, or escalate. Presets cover finance/accounting, legal, healthcare/medical, DevOps/SRE, cloud/infrastructure, security, compliance, HR/recruiting, and general business.
+4. **Outputs / Templates**: optional expected output sections, output template, document-like result setting, suggested download name, and summary style.
+5. **Prepared Prompts**: recommended reusable prompt templates users can run later in Use mode.
+6. **Examples**: optional example prompts, example input values, and expected outputs.
 7. **Review & Create**: review the summary and create, validate, use, package, or open the kit.
 
-Required steps are Basics, at least one Skill, and at least one Prepared Prompt. Policies, Templates, and Examples are optional.
+Required steps are Basics and at least one Skill. Prepared Prompts are recommended for repeatable tasks, but not required; users can still run the kit with a custom prompt. Policies, Templates, Examples, Workflows, References, Evals, and Scripts are optional. The app shows clean step titles with small Optional or Recommended badges instead of baking those words into the title.
 
-Prepared Prompts are centered in the Guided Builder. Each prompt includes:
+Prepared Prompts are encouraged in the Guided Builder because they make repeatable workflows easier. Each prompt includes:
 
 - prompt name and auto-generated prompt ID
 - description
@@ -249,7 +249,7 @@ Build with AI is iterative. AgentKitForge uses `agentkitforge-core` to create a 
 
 Generated AI drafts are not usable Agent Kits yet and are not added to My Kits automatically. They remain draft sessions until you click **Save**, which renders the current draft into an Agent Kit folder. After saving, AgentKitForge offers actions to validate the kit, add it to My Kits, use it, or package/export it.
 
-The **Sections to include** control lets you choose which draft sections the AI should include. Basics, Skills, and Prepared Prompts are required and locked. Optional sections include Policies, Templates / Outputs, Examples, Workflows, References, Evals, and Scripts. Scripts are marked Advanced and should be selected only when the kit really needs code.
+The **Sections to include** control lets you choose which draft sections the AI should include. Basics and Skills are required and locked. Prepared Prompts are recommended but can be turned off. Optional sections include Policies, Templates / Outputs, Examples, Workflows, References, Evals, and Scripts. Scripts are marked Advanced and should be selected only when the kit really needs code.
 
 The **Example input document** control accepts `.txt`, `.md`, `.csv`, `.xlsx`, and `.xls` files. Text, Markdown, and CSV files are summarized from their extracted text. Spreadsheet support is metadata-only in v0.1 unless richer parsing is added later. Example documents are used as source notes so the AI can infer terminology, formatting, required inputs, prepared prompts, and output style. AgentKitForge does not execute anything from attached documents.
 
@@ -411,7 +411,7 @@ When a contextual action opens the secondary **Validate Kit** tool, it is for ch
 
 ## Install on Local Agent
 
-Use **Install on Local Agent** to export an Agent Kit into tool-specific local formats for local agent tools like Codex or Claude Code.
+Use **Install on Local Agent** to export an Agent Kit into tool-specific local formats for local agent tools like Codex or Claude Code. The page uses target tabs, starting with **Codex** and **Claude Code**, so only one install target is shown at a time.
 
 The first supported target is Codex skills:
 
@@ -435,9 +435,11 @@ Claude Code uses plugin-style folders. AgentKitForge exports the kit as a Claude
 
 AgentKitForge writes files only. It does not launch Claude Code, restart Claude Code, or verify that the Claude Code runtime loaded the plugin. This is an initial adapter, so verify plugin loading behavior in Claude Code.
 
+The tab layout is intended to support later local-agent targets such as Cursor or other tools without stacking every installer on one page.
+
 ## Settings
 
-Settings controls local app defaults and AI provider access:
+Settings controls local app defaults and AI provider access. Settings are grouped into responsive cards: wide windows show multiple settings cards per row, and narrow windows stack them vertically.
 
 - **AI Providers**: add OpenAI, Anthropic, Gemini, Ollama, or custom OpenAI-compatible providers; save/update keys; choose defaults; and test connections.
 - **Storage & Folders**: AgentKitForge Library, derived Exports and Drafts folders, and remembered Codex / Claude Code destinations.
