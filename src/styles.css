@@ -467,6 +467,67 @@ textarea {
   text-transform: uppercase;
 }
 
+.use-kit-selector {
+  display: grid;
+  gap: 10px;
+}
+
+.selected-kit-card,
+.prompt-choice-card,
+.prompt-mode-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  text-align: left;
+}
+
+.selected-kit-card p,
+.selected-kit-card small,
+.prompt-choice-card span,
+.prompt-choice-card small,
+.prompt-mode-card span,
+.prompt-mode-card small {
+  margin: 0;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.selected-kit-card > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.selected-kit-card > div span {
+  color: var(--color-primary);
+  font-weight: 700;
+}
+
+.prompt-mode-grid,
+.prompt-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.prompt-choice-card:hover,
+.prompt-choice-card.active,
+.prompt-mode-card:hover,
+.prompt-mode-card.active {
+  border-color: rgba(79, 70, 229, 0.42);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.prompt-mode-card:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
 .tab-list {
   display: flex;
   flex-wrap: wrap;

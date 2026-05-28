@@ -334,27 +334,34 @@ The default model comes from the selected/default provider. You can choose a kno
 To run a kit inside Forge:
 
 1. Open the Use section.
-2. Choose a kit from **My Kits**. Use **Add existing kit** only when the kit is not in your local library yet.
-3. Choose a **Prepared Prompt** if the kit defines one.
-4. Fill the required inputs shown by the prompt, such as audience, reporting period, project/environment, file summary, or desired output type.
-5. Review the collapsed **Prompt Preview** before sending.
+2. Choose a kit from **My Kits**. Use **Add existing kit...** only when the kit is not in your local library yet.
+3. Choose either **Use a Prepared Prompt** or **Write my own prompt**.
+4. For a prepared prompt, choose the prompt card, fill required inputs, and review the rendered prompt preview.
+5. For a custom prompt, write what you want the selected Agent Kit to help with.
 6. Open **Advanced Settings** only when you need additional context, context mode, references, max skills, prompt inclusion, or output token options.
-7. If the kit has no prepared prompts, use the freeform task fallback. Prepared prompts help make repeatable workflows easier, but they are not required.
-8. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
-9. Click **Run with AI**.
-10. Review the response before relying on it.
+7. Keep **Validate before running** enabled unless you intentionally want to run an invalid work-in-progress kit.
+8. Click **Run with AI**.
+9. Review the response before relying on it.
 
-Prepared Prompts live in the kit's `prompts/` folder. AgentKitForge lists them in friendly form, renders their input fields, validates required values, and sends the rendered prompt as the main task. Supported input types are short text, long text, choice, multi-choice, date, number, and boolean.
+If the selected kit has prepared prompts, Use mode defaults to **Use a Prepared Prompt**. If the kit has no prepared prompts, Use mode defaults to **Write my own prompt** and shows a friendly fallback message.
 
-Prompt preview shows the final rendered prompt without exposing raw prompt JSON by default. You can expand and copy the preview before running. Additional context, raw details, included files, included skills, and context warnings are kept under Advanced sections.
+Prepared Prompts live in the kit's `prompts/` folder. AgentKitForge lists them in friendly cards with prompt name, description, input count, and document-output status. It renders input fields, validates required values, and sends the rendered prompt as the main task. Supported input types are short text, long text, choice, multi-choice, date, number, and boolean.
 
-If a selected prompt marks its output as document-like, **Download as Markdown** is emphasized after the response. Download names use the prompt's `suggestedFileName` when available; otherwise AgentKitForge falls back to a sensible kit-based timestamped name. Plain text download and copy response remain available.
+Custom Prompt mode does not require prepared prompts. The textarea is labeled **What do you want this kit to help with?** and is combined with the selected kit context from the core Context Builder.
+
+Prompt preview shows the final rendered prepared prompt or planned custom prompt without exposing raw prompt JSON by default. You can expand and copy the preview before running. Additional context, raw details, included files, included skills, and context warnings are kept under Advanced sections.
+
+All responses support **Copy response**, **Download as Markdown**, **Download as Text**, and **Clear**. If a selected prepared prompt marks its output as document-like, **Download as Markdown** is emphasized after the response. Download names use the prompt's `suggestedFileName` when available; otherwise AgentKitForge falls back to a sensible kit-based timestamped name.
 
 If the kit has `START_HERE.md` or `README.md`, the Use screen shows a bounded, collapsed local hint from that file. You can expand or copy it. This does not call an AI provider.
 
 With **Validate before running** enabled, AgentKitForge validates the selected kit with the chosen validation profile before making the AI provider request. If validation fails, the run is blocked and the validation issues are shown. Turn the checkbox off only when you deliberately want to test or debug an invalid kit.
 
 After a response is generated, you can copy it, download it as Markdown, download it as plain text, or clear it from the screen. Saved Markdown includes the response plus run metadata for review.
+
+Run metadata shows the kit name, provider, model, prompt mode, prepared prompt name when applicable, context mode, included skills, warning count, and timestamp. Full technical details remain collapsed.
+
+When you click **Use Kit** from My Kits, the Use screen immediately selects that kit and loads its prepared prompts without requiring you to leave and return to the Use tab.
 
 ### Context Builder Options
 
