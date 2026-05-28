@@ -309,7 +309,7 @@ Normal views show friendly file names and locations first. Full filesystem paths
 
 Open **Package / Export** when a kit is ready to distribute or hand off.
 
-Choose a kit from **My Kits** first. Use **Add existing kit...** only when the kit is not in your library yet. Exports default to the app-managed exports folder, normally `Documents/AgentKitForge/Exports`; the screen shows this as **AgentKitForge Exports** and keeps the full path under Advanced details.
+Choose a kit from **My Kits** first. Use **Add existing kit...** only when the kit is not in your library yet. The selected kit is shown with name, version, description, and friendly location. Exports default to the app-managed exports folder, normally `Documents/AgentKitForge/Exports`; the screen shows this as **AgentKitForge Exports** and keeps the full path under **Show full path**.
 
 Artifact types:
 
@@ -323,7 +323,7 @@ Artifact names are predictable:
 
 The screen can run validation before creating the `.agentkit.zip`. If validation is enabled and the selected profile fails, packaging is blocked until the kit is fixed or validation is explicitly disabled. One-file Markdown export does not run validation automatically.
 
-After an artifact is created, use **Open output folder** or **Copy path** to locate or share the generated file.
+After an artifact is created, the result shows artifact type, filename, and friendly output location. Use **Open output folder** or the secondary **Copy path** action to locate or share the generated file. Full artifact paths are kept under **Show full path**.
 
 ## Use Inside Forge With AI
 
@@ -406,22 +406,22 @@ Use **Install Targets** to export an Agent Kit into tool-specific local formats.
 The first supported target is Codex skills:
 
 1. Choose an Agent Kit from My Kits.
-2. Choose the Codex skills destination folder if one has not been saved yet.
+2. Use the remembered Codex skills destination folder, or choose it once if no destination has been saved yet.
 3. Enable force overwrite only when replacing AgentKitForge-generated export folders is intentional.
 4. Click **Export/Install to Codex**.
 
-Codex needs skills in its own skills folder. AgentKitForge copies the kit's skills there so Codex can discover them in future sessions. Users choose the destination skills folder; AgentKitForge remembers it locally after selection.
+Codex needs skills in its own skills folder. AgentKitForge copies the kit's skills there so Codex can discover them in future sessions. Users choose the destination skills folder; AgentKitForge remembers it locally after selection and shows the friendly label **Destination: Codex skills folder**. Full destination paths stay behind **Show full path**, **Copy path**, or Advanced sections.
 
 AgentKitForge writes files only. It does not launch Codex, restart Codex, or verify that the Codex runtime loaded the exported skills.
 
 Claude Code plugin export is also available:
 
 1. Choose an Agent Kit from My Kits.
-2. Choose the Claude Code plugins destination folder if one has not been saved yet.
+2. Use the remembered Claude Code plugins destination folder, or choose it once if no destination has been saved yet.
 3. Enable force overwrite only when replacing the AgentKitForge-generated plugin folder is intentional.
 4. Click **Export/Install to Claude Code**.
 
-Claude Code uses plugin-style folders. AgentKitForge exports the kit as a Claude Code plugin-style package, including a plugin manifest, skills, and supported kit content. Users choose the destination plugins folder; AgentKitForge remembers it locally after selection.
+Claude Code uses plugin-style folders. AgentKitForge exports the kit as a Claude Code plugin-style package, including a plugin manifest, skills, and supported kit content. Users choose the destination plugins folder; AgentKitForge remembers it locally after selection and shows the friendly label **Destination: Claude Code plugins folder**. Full destination paths stay behind **Show full path**, **Copy path**, or Advanced sections.
 
 AgentKitForge writes files only. It does not launch Claude Code, restart Claude Code, or verify that the Claude Code runtime loaded the plugin. This is an initial adapter, so verify plugin loading behavior in Claude Code.
 
@@ -459,6 +459,15 @@ My Kits is a local-only library of Agent Kit folders on this machine. It is for 
 When My Kits has entries, it stays focused on library actions only: use, validate, package/export, install target, open folder, refresh, or remove from the library. Import and add-folder workflows live in the separate **Import** section. If the library is empty, My Kits shows shortcuts for Build with AI, Guided Builder, and Import Agent Kit.
 
 Library entries include kit id, name, version, description, path, source, validation history, last-used time, and timestamps. **Remove from My Kits** only removes the local library entry; it does not delete files from disk.
+
+Each kit has a **Details** panel. It uses `agentkitforge-core` `getAgentKitSummary` where available to show friendly sections:
+
+- Overview: name, version, description, domain/category, source, and validation status.
+- Components: counts for skills, prepared prompts, policies, templates, examples, workflows, and references.
+- Prepared Prompts: name, description, input count, and document-like output indicator.
+- Skills: name, description, and risk level where available.
+- Location: friendly label first, with full path behind **Show full path**.
+- Technical details: collapsible raw path, manifest path, and raw summary when needed.
 
 The library is stored in Tauri app-local data as `my-kits.json`. On Windows this is typically under the user's local app data folder for AgentKitForge, alongside `settings.json`. The exact path is resolved by Tauri at runtime.
 

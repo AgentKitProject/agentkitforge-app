@@ -508,6 +508,36 @@ textarea {
   font-weight: 700;
 }
 
+.kit-details-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.kit-details-panel h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.kit-detail-list {
+  display: grid;
+  gap: 8px;
+}
+
+.kit-detail-list article {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--color-muted-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+}
+
+.kit-detail-list p,
+.kit-detail-list small {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
 .prompt-mode-grid,
 .prompt-card-grid {
   display: grid;

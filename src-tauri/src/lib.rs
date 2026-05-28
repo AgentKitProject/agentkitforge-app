@@ -703,7 +703,7 @@ fn package_agent_kit<R: Runtime>(
 ) -> Result<PackageAgentKitResult, String> {
     let root_path = canonicalize_directory(&input.root_path)?;
     let output_folder = canonicalize_directory(&input.output_folder)?;
-    let out_file = output_folder.join(format!("{}.agentkit.zip", default_artifact_stem(&root_path)));
+    let out_file = output_folder.join(default_package_file_name(&root_path));
     let bridge_script = resolve_package_bridge(&app)?;
     let node_command = resolve_node_command()?;
 
@@ -1868,6 +1868,17 @@ fn default_markdown_file_name(root_path: &Path) -> String {
                 .unwrap_or("agent-kit");
             format!("{stem}.onefile.md")
         }
+    }
+}
+
+fn default_package_file_name(root_path: &Path) -> String {
+    match read_kit_metadata(root_path) {
+        Ok(metadata) => format!(
+            "{}-{}.agentkit.zip",
+            sanitize_folder_name(&metadata.id),
+            sanitize_folder_name(&metadata.version)
+        ),
+        Err(_) => format!("{}.agentkit.zip", default_artifact_stem(root_path)),
     }
 }
 

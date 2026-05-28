@@ -232,6 +232,23 @@ type MyKitEntry = {
   pathExists: boolean;
 };
 
+type AgentKitSummary = {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  domain?: string;
+  targetUsers?: string[] | string;
+  validationStatus?: "valid" | "invalid";
+  counts?: Record<string, number>;
+  lists?: Record<string, unknown[]>;
+  paths?: {
+    rootPath?: string;
+    manifestPath?: string;
+  };
+  warnings?: string[];
+};
+
 type ImportAgentKitPackageResult = {
   extractedPath: string;
   validationReport: ValidationReport;
@@ -875,6 +892,7 @@ function MyKitsScreen({
   onValidateKit: (path: string) => void;
 }) {
   const [kits, setKits] = useState<MyKitEntry[]>([]);
+  const [kitSummaries, setKitSummaries] = useState<Record<string, AgentKitSummary>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -887,12 +905,30 @@ function MyKitsScreen({
     setError(null);
 
     try {
-      setKits(await invoke<MyKitEntry[]>("list_my_kits"));
+      const loadedKits = await invoke<MyKitEntry[]>("list_my_kits");
+      setKits(loadedKits);
+      void loadKitSummaries(loadedKits);
     } catch (caughtError) {
       setError(errorToMessage(caughtError));
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function loadKitSummaries(loadedKits: MyKitEntry[]) {
+    const entries = await Promise.all(
+      loadedKits
+        .filter((kit) => kit.pathExists)
+        .map(async (kit) => {
+          try {
+            const summary = await invoke<AgentKitSummary>("get_agent_kit_summary", { path: kit.path });
+            return [kit.path, summary] as const;
+          } catch {
+            return null;
+          }
+        }),
+    );
+    setKitSummaries(Object.fromEntries(entries.filter((entry): entry is readonly [string, AgentKitSummary] => Boolean(entry))));
   }
 
   async function removeKit(path: string) {
@@ -1011,13 +1047,8 @@ function MyKitsScreen({
               </div>
             </dl>
             <details className="advanced-details">
-              <summary>Advanced details</summary>
-              <dl className="report-meta">
-                <div>
-                  <dt>Full folder path</dt>
-                  <dd>{kit.path}</dd>
-                </div>
-              </dl>
+              <summary>Details</summary>
+              <MyKitDetails kit={kit} summary={kitSummaries[kit.path]} />
             </details>
 
             <div className="button-row">
@@ -1050,6 +1081,110 @@ function MyKitsScreen({
         ))}
       </div>
     </div>
+  );
+}
+
+function MyKitDetails({ kit, summary }: { kit: MyKitEntry; summary?: AgentKitSummary }) {
+  const lists = summary?.lists ?? {};
+  const skills = summaryList(lists.skills);
+  const prompts = summaryList(lists.preparedPrompts ?? lists.prompts);
+  const policies = summaryList(lists.policies);
+  const templates = summaryList(lists.templates);
+  const examples = summaryList(lists.examples);
+  const workflows = summaryList(lists.workflows);
+  const references = summaryList(lists.references);
+
+  return (
+    <div className="kit-details-panel">
+      <section>
+        <h3>Overview</h3>
+        <dl className="report-meta">
+          <div><dt>Name</dt><dd>{summary?.name || kit.name}</dd></div>
+          <div><dt>Version</dt><dd>{summary?.version || kit.version}</dd></div>
+          <div><dt>Description</dt><dd>{summary?.description || kit.description || "No description available."}</dd></div>
+          <div><dt>Domain</dt><dd>{summary?.domain || "Not specified"}</dd></div>
+          <div><dt>Source</dt><dd>{kit.source}</dd></div>
+          <div><dt>Validation</dt><dd>{formatValidationState(kit)}</dd></div>
+        </dl>
+      </section>
+
+      <section>
+        <h3>Components</h3>
+        <dl className="report-meta">
+          <div><dt>Skills</dt><dd>{summaryCount(summary, "skills", skills.length)}</dd></div>
+          <div><dt>Prepared Prompts</dt><dd>{summaryCount(summary, "preparedPrompts", prompts.length)}</dd></div>
+          <div><dt>Policies</dt><dd>{summaryCount(summary, "policies", policies.length)}</dd></div>
+          <div><dt>Templates</dt><dd>{summaryCount(summary, "templates", templates.length)}</dd></div>
+          <div><dt>Examples</dt><dd>{summaryCount(summary, "examples", examples.length)}</dd></div>
+          <div><dt>Workflows</dt><dd>{summaryCount(summary, "workflows", workflows.length)}</dd></div>
+          <div><dt>References</dt><dd>{summaryCount(summary, "references", references.length)}</dd></div>
+        </dl>
+      </section>
+
+      <SummaryListSection title="Prepared Prompts" items={prompts} kind="prompt" />
+      <SummaryListSection title="Skills" items={skills} kind="skill" />
+      <SummaryListSection title="Policies" items={policies} />
+      <SummaryListSection title="Templates" items={templates} />
+      <SummaryListSection title="Examples" items={examples} />
+      {(workflows.length > 0 || references.length > 0) && (
+        <SummaryListSection title="Workflows / References" items={[...workflows, ...references]} />
+      )}
+
+      <section>
+        <h3>Location</h3>
+        <dl className="report-meta">
+          <div><dt>Location</dt><dd>{friendlyLocation(kit.path)}</dd></div>
+        </dl>
+        <details className="advanced-details compact-advanced">
+          <summary>Show full path</summary>
+          <div className="inline-code">{kit.path}</div>
+        </details>
+      </section>
+
+      <details className="advanced-details compact-advanced">
+        <summary>Technical details</summary>
+        <dl className="report-meta">
+          <div><dt>Raw path</dt><dd>{kit.path}</dd></div>
+          <div><dt>Manifest path</dt><dd>{summary?.paths?.manifestPath || "Not loaded"}</dd></div>
+        </dl>
+        {summary && <pre className="json-panel">{JSON.stringify(summary, null, 2)}</pre>}
+      </details>
+    </div>
+  );
+}
+
+function SummaryListSection({
+  items,
+  kind,
+  title,
+}: {
+  items: Record<string, unknown>[];
+  kind?: "prompt" | "skill";
+  title: string;
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section>
+      <h3>{title}</h3>
+      <div className="kit-detail-list">
+        {items.map((item, index) => (
+          <article key={`${title}-${index}`}>
+            <strong>{summaryItemName(item, title)}</strong>
+            <p>{stringValue(item.description, "No description available.")}</p>
+            {kind === "prompt" && (
+              <small>
+                {summaryPromptInputCount(item)} input{summaryPromptInputCount(item) === 1 ? "" : "s"}
+                {item.documentLikeOutput === true ? " - document-like output" : ""}
+              </small>
+            )}
+            {kind === "skill" && <small>Risk: {stringValue(item.riskLevel, "not specified")}</small>}
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -3604,6 +3739,23 @@ function MyKitSelector({
   );
 }
 
+function SelectedKitSummaryCard({ kit }: { kit: MyKitEntry }) {
+  return (
+    <article className="selected-kit-card">
+      <div>
+        <strong>{kit.name}</strong>
+        <span>{kit.version}</span>
+      </div>
+      <p>{kit.description || "No description available."}</p>
+      <small>{friendlyLocation(kit.path)}</small>
+      <details className="advanced-details compact-advanced">
+        <summary>Show full path</summary>
+        <div className="inline-code">{kit.path}</div>
+      </details>
+    </article>
+  );
+}
+
 function GuidedBuilder({
   error,
   form,
@@ -5247,6 +5399,7 @@ function PackageExportScreen({
   const [isPackaging, setIsPackaging] = useState(false);
   const [isExportingOneFile, setIsExportingOneFile] = useState(false);
   const [copyState, setCopyState] = useState<string | null>(null);
+  const selectedKit = myKits.find((kit) => pathsEqualLoose(kit.path, kitPath));
 
   useEffect(() => {
     setKitPath(currentKitPath);
@@ -5259,7 +5412,14 @@ function PackageExportScreen({
 
   useEffect(() => {
     invoke<MyKitEntry[]>("list_my_kits")
-      .then((kits) => setMyKits(kits.filter((kit) => kit.pathExists)))
+      .then((kits) => {
+        const availableKits = kits.filter((kit) => kit.pathExists);
+        setMyKits(availableKits);
+        if (!kitPath && availableKits.length > 0) {
+          setKitPath(availableKits[0].path);
+          onKitPathChange(availableKits[0].path);
+        }
+      })
       .catch(() => setMyKits([]));
   }, []);
 
@@ -5437,6 +5597,7 @@ function PackageExportScreen({
           Add existing kit...
         </button>
         <FieldError message={fieldErrors.kitPath} />
+        {selectedKit && <SelectedKitSummaryCard kit={selectedKit} />}
 
         <div className="artifact-explainer">
           <article>
@@ -5523,6 +5684,7 @@ function PackageExportScreen({
           isLoading={isPackaging || isExportingOneFile}
           onCopyArtifactPath={copyArtifactPath}
           onOpenOutputFolder={openOutputFolder}
+          outputFolder={outputFolder}
           validationReport={validationReport}
         />
       </div>
@@ -5563,6 +5725,7 @@ function InstallTargetsScreen({
   const [isExportingClaude, setIsExportingClaude] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [claudeCopyState, setClaudeCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const selectedKit = myKits.find((kit) => pathsEqualLoose(kit.path, kitPath));
 
   useEffect(() => {
     setKitPath(currentKitPath);
@@ -5570,7 +5733,14 @@ function InstallTargetsScreen({
 
   useEffect(() => {
     invoke<MyKitEntry[]>("list_my_kits")
-      .then((kits) => setMyKits(kits.filter((kit) => kit.pathExists)))
+      .then((kits) => {
+        const availableKits = kits.filter((kit) => kit.pathExists);
+        setMyKits(availableKits);
+        if (!kitPath && availableKits.length > 0) {
+          setKitPath(availableKits[0].path);
+          onKitPathChange(availableKits[0].path);
+        }
+      })
       .catch(() => setMyKits([]));
   }, []);
 
@@ -5778,12 +5948,13 @@ function InstallTargetsScreen({
             Add existing kit...
           </button>
           <FieldError message={fieldErrors.kitPath} />
+          {selectedKit && <SelectedKitSummaryCard kit={selectedKit} />}
 
           <LabelWithHelp htmlFor="codex-destination" label="Codex destination" help="Choose the skills folder Codex reads from. AgentKitForge remembers this destination." />
           <div className="friendly-location-row">
             <span>Destination: {destinationSkillsDir ? "Codex skills folder" : "Choose Codex skills folder"}</span>
             <button className="secondary-button compact-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} type="button">
-              Choose custom location
+              {destinationSkillsDir ? "Choose custom location" : "Choose once"}
             </button>
           </div>
           <details className="advanced-details">
@@ -5832,6 +6003,7 @@ function InstallTargetsScreen({
             onCopyDestinationPath={copyDestinationPath}
             onOpenDestinationFolder={openDestinationFolder}
             result={result}
+            selectedKitName={selectedKit?.name}
             validationReport={installValidationReport}
           />
         </div>
@@ -5878,12 +6050,13 @@ function InstallTargetsScreen({
             Add existing kit...
           </button>
           <FieldError message={claudeFieldErrors.kitPath} />
+          {selectedKit && <SelectedKitSummaryCard kit={selectedKit} />}
 
           <LabelWithHelp htmlFor="claude-destination" label="Claude Code destination" help="Choose the plugins folder Claude Code reads from. AgentKitForge remembers this destination." />
           <div className="friendly-location-row">
             <span>Destination: {claudeDestinationDir ? "Claude Code plugins folder" : "Choose Claude Code plugins folder"}</span>
             <button className="secondary-button compact-button" disabled={isSelectingClaudeDestination || isExportingClaude} onClick={selectClaudeDestinationFolder} type="button">
-              Choose custom location
+              {claudeDestinationDir ? "Choose custom location" : "Choose once"}
             </button>
           </div>
           <details className="advanced-details">
@@ -5932,6 +6105,7 @@ function InstallTargetsScreen({
             onCopyDestinationPath={copyClaudeDestinationPath}
             onOpenDestinationFolder={openClaudeDestinationFolder}
             result={claudeResult}
+            selectedKitName={selectedKit?.name}
             validationReport={installValidationReport}
           />
         </div>
@@ -5947,6 +6121,7 @@ function CodexExportResults({
   onCopyDestinationPath,
   onOpenDestinationFolder,
   result,
+  selectedKitName,
   validationReport,
 }: {
   copyState: "idle" | "copied" | "failed";
@@ -5955,6 +6130,7 @@ function CodexExportResults({
   onCopyDestinationPath: () => void;
   onOpenDestinationFolder: () => void;
   result: CodexExportResult | null;
+  selectedKitName?: string;
   validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
@@ -5987,6 +6163,14 @@ function CodexExportResults({
       {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
 
       <dl className="report-meta">
+        <div>
+          <dt>Target</dt>
+          <dd>Codex</dd>
+        </div>
+        <div>
+          <dt>Selected kit</dt>
+          <dd>{selectedKitName || "Selected kit"}</dd>
+        </div>
         <div>
           <dt>Destination</dt>
           <dd>Codex skills folder</dd>
@@ -6088,6 +6272,7 @@ function ClaudeCodeExportResults({
   onCopyDestinationPath,
   onOpenDestinationFolder,
   result,
+  selectedKitName,
   validationReport,
 }: {
   copyState: "idle" | "copied" | "failed";
@@ -6096,6 +6281,7 @@ function ClaudeCodeExportResults({
   onCopyDestinationPath: () => void;
   onOpenDestinationFolder: () => void;
   result: ClaudeCodeExportResult | null;
+  selectedKitName?: string;
   validationReport: ValidationReport | null;
 }) {
   if (isLoading) {
@@ -6128,6 +6314,14 @@ function ClaudeCodeExportResults({
       {validationReport && <ValidationResults error={null} isLoading={false} report={validationReport} />}
 
       <dl className="report-meta">
+        <div>
+          <dt>Target</dt>
+          <dd>Claude Code</dd>
+        </div>
+        <div>
+          <dt>Selected kit</dt>
+          <dd>{selectedKitName || "Selected kit"}</dd>
+        </div>
         <div>
           <dt>Destination</dt>
           <dd>Claude Code plugins folder</dd>
@@ -6189,6 +6383,7 @@ function PackageExportResults({
   isLoading,
   onCopyArtifactPath,
   onOpenOutputFolder,
+  outputFolder,
   validationReport,
 }: {
   artifacts: ArtifactResult[];
@@ -6197,6 +6392,7 @@ function PackageExportResults({
   isLoading: boolean;
   onCopyArtifactPath: (artifactPath: string) => void;
   onOpenOutputFolder: () => void;
+  outputFolder: string;
   validationReport: ValidationReport | null;
 }) {
   if (isLoading && artifacts.length === 0 && !error) {
@@ -6233,6 +6429,7 @@ function PackageExportResults({
                 <div>
                   <div className="issue-code">{artifact.artifactType}</div>
                   <p>{friendlyFileName(artifact.artifactPath)}</p>
+                  <small>{isDefaultExportsFolder(outputFolder) ? "AgentKitForge Exports" : friendlyLocation(outputFolder)}</small>
                   {copyState === artifact.artifactPath && (
                     <div className="copy-state">Artifact path copied.</div>
                   )}
@@ -7180,6 +7377,22 @@ function formatValidationState(kit: MyKitEntry) {
   }
 
   return `${kit.lastValidationValid ? "Valid" : "Invalid"} (${kit.lastValidatedProfile ?? "unknown"})`;
+}
+
+function summaryList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function summaryCount(summary: AgentKitSummary | undefined, key: string, fallback: number) {
+  return summary?.counts?.[key] ?? fallback;
+}
+
+function summaryItemName(item: Record<string, unknown>, fallback: string) {
+  return stringValue(item.name, stringValue(item.id, fallback));
+}
+
+function summaryPromptInputCount(item: Record<string, unknown>) {
+  return Array.isArray(item.inputs) ? item.inputs.length : 0;
 }
 
 function formatTimestamp(value?: string) {
