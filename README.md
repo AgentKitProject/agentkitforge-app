@@ -27,13 +27,13 @@ Install dependencies:
 npm install
 ```
 
-The app uses `agentkitforge-core` as a local npm file dependency during development:
+The app consumes the released core package by Git tag:
 
 ```json
-"agentkitforge-core": "file:../agentkitforge-core"
+"@agentkitforge/core": "github:BillBoardApp/agentkitforge-core#v0.1.0"
 ```
 
-Expected local workspace layout:
+For core development, a sibling checkout is still useful:
 
 ```text
 agentkitforge/
@@ -41,7 +41,7 @@ agentkitforge/
   agentkitforge-core/
 ```
 
-Build the core package before validating kits from the desktop app:
+Build the sibling core package when testing unreleased core changes locally:
 
 ```sh
 cd ../agentkitforge-core
@@ -51,7 +51,7 @@ cd ../agentkitforge-app
 npm install
 ```
 
-During development, the app normally finds `agentkitforge-core` from the sibling workspace path. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged production builds do not honor these development override variables.
+During development, backend bridge scripts can use a sibling `agentkitforge-core` checkout when it exists. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged production builds do not honor these development override variables.
 
 Run the desktop app in development mode:
 
@@ -105,7 +105,7 @@ The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` int
 
 The GitHub Actions smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
 
-It uses Node 26 on `windows-latest`, checks out this app plus the sibling `agentkitforge-core` repository, installs both with `npm ci`, builds the core package, and then runs:
+It uses Node 26 on `windows-latest`, installs the app with `npm ci`, and resolves `@agentkitforge/core` from the pinned Git tag in `package-lock.json`. It then runs:
 
 ```sh
 npm run check
@@ -120,7 +120,7 @@ npm run build:tauri
 
 The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend build path. The workflow does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
 
-If `agentkitforge-core` is private, add a repository secret named `AGENTKITFORGE_CORE_READ_TOKEN` with read access to the core repository. The workflow uses that secret for the core checkout and falls back to `GITHUB_TOKEN` when the core repository is publicly readable or otherwise accessible. If the core repository is not under the same owner as this app repository, set the repository variable `AGENTKITFORGE_CORE_REPOSITORY` to `owner/agentkitforge-core`.
+If `agentkitforge-core` is private, add a repository secret named `AGENTKITFORGE_CORE_READ_TOKEN` with read access to the core repository. The workflow uses that token to let `npm ci` fetch the pinned Git dependency. If the core repository is public or otherwise accessible to `GITHUB_TOKEN`, the secret is not required.
 
 ## Branding
 

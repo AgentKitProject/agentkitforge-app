@@ -14,6 +14,12 @@ While AgentKitForge is below `1.0.0`, minor versions may include breaking change
 
 Patch versions should be reserved for compatible fixes, small UX improvements, documentation updates, and security hardening.
 
+Conventional Commit release mapping:
+
+- `feat:` creates a minor release.
+- `fix:` and `fix(security):` create a patch release.
+- Breaking changes before `1.0.0` are treated as minor releases, but they must be documented clearly in the commit body and release notes.
+
 ## App Releases
 
 The desktop app version should align across:

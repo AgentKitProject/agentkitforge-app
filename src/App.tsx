@@ -25,8 +25,8 @@ import {
   isBaseUrlRequiredForProvider,
   normalizeBaseUrl,
   providerSupportsStructuredJson,
-} from "../../agentkitforge-core/dist/providers/catalog.js";
-import type { AiProviderType } from "../../agentkitforge-core/dist/providers/types.js";
+} from "@agentkitforge/core/dist/providers/catalog.js";
+import type { AiProviderType } from "@agentkitforge/core/dist/providers/types.js";
 import agentKitForgeIcon from "./assets/brand/agentkitforge-icon.svg";
 
 type SectionId = "my-kits" | "import" | "build" | "use" | "validate" | "settings";

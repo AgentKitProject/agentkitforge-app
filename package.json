@@ -1,7 +1,7 @@
 {
   "name": "agentkitforge-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Desktop app for building, validating, packaging, installing, and using Agent Kits.",
   "author": "AgentKitForge",
   "type": "module",
@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
-    "agentkitforge-core": "file:../agentkitforge-core",
+    "@agentkitforge/core": "github:BillBoardApp/agentkitforge-core#v0.1.0",
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

@@ -33,5 +33,5 @@ async function loadCore() {
     // Fall back to the installed package.
   }
 
-  return import("agentkitforge-core");
+  return import("@agentkitforge/core");
 }

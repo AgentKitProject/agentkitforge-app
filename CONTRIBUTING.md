@@ -63,3 +63,29 @@ Please open an issue or discussion before starting work on:
 ## Pull Requests
 
 Keep pull requests focused and explain the user-facing behavior change. Include screenshots for UI changes, describe security implications where relevant, and update docs when workflows change.
+
+## Conventional Commits and Releases
+
+Use Conventional Commits for commit titles so Release Please can create release PRs, tags, GitHub Releases, and release notes.
+
+Common examples:
+
+- `feat: add a new provider option`
+- `fix: correct prepared prompt validation`
+- `fix(security): redact provider token errors`
+- `docs: update import instructions`
+- `chore: update CI configuration`
+
+Version impact:
+
+- `feat:` creates a minor release.
+- `fix:` and `fix(security):` create a patch release.
+- Breaking changes before `1.0.0` are treated as minor releases, but they must be documented clearly.
+
+Release PRs are generated automatically by Release Please from commits on `main`. The release happens when the Release Please PR is merged. Installer artifacts are built separately by a release-artifacts workflow/process.
+
+Use a breaking-change footer when needed:
+
+```text
+BREAKING CHANGE: describe the migration or behavior change.
+```
