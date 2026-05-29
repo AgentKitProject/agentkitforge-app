@@ -105,7 +105,7 @@ The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` int
 
 The GitHub Actions smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
 
-It uses Node 24 on `windows-latest`, checks out this app plus the sibling `agentkitforge-core` repository, installs both with `npm ci`, builds the core package, and then runs:
+It uses Node 26 on `windows-latest`, checks out this app plus the sibling `agentkitforge-core` repository, installs both with `npm ci`, builds the core package, and then runs:
 
 ```sh
 npm run check

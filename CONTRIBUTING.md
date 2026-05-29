@@ -8,7 +8,7 @@ The website/deployment infrastructure and Agent Kit Market backend are not publi
 
 Prerequisites:
 
-- Node.js 24.
+- Node.js 26.
 - npm.
 - Rust stable and Cargo.
 - Tauri v2 prerequisites for your OS.
