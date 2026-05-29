@@ -1,4 +1,4 @@
-# AgentKitForge v0.1.0 Release Checklist
+# AgentKitForge v0.1.0 Public Preview Release Checklist
 
 ## Version and Metadata
 
@@ -11,6 +11,7 @@
 ## Build Verification
 
 - [ ] Run `npm run check`.
+- [ ] Run `npm run smoke`.
 - [ ] Run `npm run build:tauri`.
 - [ ] Confirm Windows MSI artifact exists under `src-tauri/target/release/bundle/msi/`.
 - [ ] Confirm Windows NSIS artifact exists under `src-tauri/target/release/bundle/nsis/`.
@@ -20,8 +21,6 @@
 - [ ] Smoke test Build with AI.
 - [ ] Smoke test iterative draft revision.
 - [ ] Smoke test Guided Builder.
-- [ ] Smoke test From Template.
-- [ ] Smoke test From Draft JSON.
 - [ ] Smoke test Edit with AI.
 - [ ] Smoke test Guided Editor.
 - [ ] Smoke test Use Prepared Prompt.
@@ -32,8 +31,8 @@
 - [ ] Smoke test Import Git repository.
 - [ ] Smoke test Package / Export `.agentkit.zip`.
 - [ ] Smoke test Package / Export `.onefile.md`.
-- [ ] Smoke test Codex export.
-- [ ] Smoke test Claude Code export.
+- [ ] Smoke test Install on Local Agent: Codex.
+- [ ] Smoke test Install on Local Agent: Claude Code.
 - [ ] Smoke test Settings save/update behavior.
 - [ ] Smoke test My Kits remove behavior and confirm files are not deleted.
 
@@ -73,6 +72,7 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 
 - [ ] Upload release artifacts.
 - [ ] Upload `checksums.txt`.
+- [ ] Upload release artifacts only when ready.
 - [ ] Include `RELEASE_NOTES.md` content in the release description.
 - [ ] Note that code signing is not configured yet.
 - [ ] Note that auto-update is not implemented yet.

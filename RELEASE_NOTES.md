@@ -1,10 +1,10 @@
 # AgentKitForge Release Notes
 
-## v0.1.0
+## v0.1.0 Public Preview
 
 ### Overview
 
-AgentKitForge v0.1.0 is the first desktop release for building, reviewing, using, importing, packaging, and installing portable Agent Kits on a local machine.
+AgentKitForge v0.1.0 Public Preview is the first desktop release for building, reviewing, using, importing, packaging, and installing portable Agent Kits on a local machine.
 
 This release focuses on local-first workflows: users can create new kits, edit existing kits, run kits with their chosen AI provider, package kits for sharing, import kits from common sources, and export kit content into supported local agent tools.
 

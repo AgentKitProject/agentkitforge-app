@@ -12,6 +12,7 @@
     "build:frontend": "tsc && vite build",
     "build:tauri": "tauri build",
     "check": "tsc && cargo check --manifest-path src-tauri/Cargo.toml",
+    "smoke": "npm run check && npm run build",
     "preview": "vite preview"
   },
   "dependencies": {
