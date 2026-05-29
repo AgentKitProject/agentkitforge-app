@@ -23,8 +23,10 @@ jobs:
       - name: Check out core dependency
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/agentkitforge-core
+          repository: ${{ vars.AGENTKITFORGE_CORE_REPOSITORY || format('{0}/agentkitforge-core', github.repository_owner) }}
           path: agentkitforge-core
+          token: ${{ secrets.AGENTKITFORGE_CORE_READ_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -69,8 +71,10 @@ jobs:
       - name: Check out core dependency
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.repository_owner }}/agentkitforge-core
+          repository: ${{ vars.AGENTKITFORGE_CORE_REPOSITORY || format('{0}/agentkitforge-core', github.repository_owner) }}
           path: agentkitforge-core
+          token: ${{ secrets.AGENTKITFORGE_CORE_READ_TOKEN || github.token }}
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

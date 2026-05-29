@@ -120,6 +120,8 @@ npm run build:tauri
 
 The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend build path. The workflow does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
 
+If `agentkitforge-core` is private, add a repository secret named `AGENTKITFORGE_CORE_READ_TOKEN` with read access to the core repository. The workflow uses that secret for the core checkout and falls back to `GITHUB_TOKEN` when the core repository is publicly readable or otherwise accessible. If the core repository is not under the same owner as this app repository, set the repository variable `AGENTKITFORGE_CORE_REPOSITORY` to `owner/agentkitforge-core`.
+
 ## Branding
 
 The desktop app follows the finalized AgentKitForge brand direction from:
