@@ -30,7 +30,7 @@ npm install
 The app consumes the released core package by Git tag:
 
 ```json
-"@agentkitforge/core": "github:BillBoardApp/agentkitforge-core#v0.1.0"
+"@agentkitforge/core": "github:AgentKitProject/agentkitforge-core#v0.1.0"
 ```
 
 For core development, a sibling checkout is still useful:

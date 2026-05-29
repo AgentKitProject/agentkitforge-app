@@ -69,7 +69,7 @@ Release Please does not build or upload installer artifacts. App artifacts are b
 Current app dependency format:
 
 ```json
-"@agentkitforge/core": "github:BillBoardApp/agentkitforge-core#0.1.0"
+"@agentkitforge/core": "github:AgentKitProject/agentkitforge-core#0.1.0"
 ```
 
 For a different owner, use this pattern:
