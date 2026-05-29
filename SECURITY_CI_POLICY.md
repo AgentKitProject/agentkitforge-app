@@ -6,7 +6,6 @@ AgentKitForge v0.1 uses a practical security gate for a Tauri, React, TypeScript
 
 CI fails on:
 
-- Detected secrets from gitleaks.
 - Critical production npm vulnerabilities from `npm audit --audit-level=critical --omit=dev --package-lock-only`.
 - RustSec advisories from `cargo audit` in `src-tauri`.
 
@@ -24,18 +23,13 @@ CI reports but does not initially fail on:
 
 High npm vulnerabilities are warning-only for v0.1 because frontend/Tauri dependency trees can produce noisy advisories in development-only tooling. Critical production advisories remain blocking.
 
-## CodeQL
-
-CodeQL runs JavaScript/TypeScript analysis and reports findings through GitHub code scanning. Once CodeQL has run long enough to establish a stable baseline, high and critical CodeQL security findings should become release-blocking through repository rules or branch protection.
-
-Rust CodeQL is not enabled yet because the Tauri Linux build environment can require additional system packages and may make the first security workflow unstable. Rust dependency risk is covered by RustSec in this v0.1 policy.
-
 ## Future tightening
 
 After v0.1, tighten the policy by:
 
 - Failing on high production npm vulnerabilities.
 - Adding explicit dev-only vulnerability review rules.
-- Adding Rust CodeQL if the build environment is stable.
+- Adding secret scanning once the preferred scanner and false-positive policy are settled.
+- Adding CodeQL once the app has a stable code-scanning baseline.
 - Adding dependency freshness checks.
 - Adding scheduled scans.
