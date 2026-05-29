@@ -1,6 +1,8 @@
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
+use crate::security::{redact_user_visible_error, validate_http_base_url};
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum AiProviderType {
@@ -272,11 +274,7 @@ fn defaulted_base_url(config: &AiProviderConfig, default: &str) -> Result<String
 }
 
 fn validate_base_url(value: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(value).map_err(|_| "Base URL must be a valid URL.".to_string())?;
-    if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err("Base URL must start with http:// or https://.".to_string());
-    }
-    Ok(())
+    validate_http_base_url(value)
 }
 
 async fn call_openai_responses(
@@ -547,15 +545,16 @@ fn provider_error_message(provider_label: &str, status: StatusCode, body: &str) 
         _ => "",
     };
 
-    format!("{provider_label} request failed ({status}): {message}{hint}")
+    redact_user_visible_error(&format!("{provider_label} request failed ({status}): {message}{hint}"))
 }
 
 fn connection_error(error: reqwest::Error) -> String {
-    if error.is_connect() {
+    let message = if error.is_connect() {
         format!("Connection refused or provider is unreachable: {error}")
     } else if error.is_timeout() {
         format!("Provider request timed out: {error}")
     } else {
         format!("Unable to reach provider: {error}")
-    }
+    };
+    redact_user_visible_error(&message)
 }

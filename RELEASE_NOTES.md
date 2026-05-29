@@ -109,7 +109,9 @@ Runtime AI provider calls, provider settings, local API key storage, connection 
 
 - AgentKitForge is local-first and does not require an account.
 - My Kits entries and app preferences are stored locally on the user's machine.
-- Provider API keys are stored in local app data for v0.1, not in an OS keychain.
-- Users should not share local app data or commit generated settings files.
+- Provider API keys are stored locally in this app's settings file on your machine, not in an OS keychain. Do not use shared or untrusted machines. You can clear stored keys from Settings.
+- Provider and Git error details are redacted before display.
 - Git repository import is read-only. AgentKitForge does not push commits, write to remotes, or execute repository scripts during import.
+- Git imports disable interactive credential prompts, time out long-running clones, and skip symlinked files for safety.
+- `.agentkit.zip` imports enforce v0.1 extraction limits to reduce zip bomb and oversized-package risk.
 - Local model providers such as Ollama depend on the user's local server configuration and availability.

@@ -498,6 +498,7 @@ textarea {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
+  min-width: 0;
   padding: 10px;
   background: var(--color-muted-surface);
   border: 1px solid var(--color-border);
@@ -513,6 +514,8 @@ textarea {
 .section-chip small,
 .section-chip em {
   display: block;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .section-chip small {
@@ -526,6 +529,7 @@ textarea {
   font-style: normal;
   font-weight: 800;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .use-kit-selector {
@@ -657,17 +661,17 @@ textarea {
 
 .guided-stepper {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   gap: 8px;
   min-width: 0;
 }
 
 .step-button {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
-  min-height: 44px;
-  padding: 0 10px;
+  min-height: 56px;
+  padding: 10px;
   color: var(--color-text-secondary);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -696,6 +700,7 @@ textarea {
   gap: 6px;
   align-items: center;
   min-width: 0;
+  max-width: 100%;
   line-height: 1.25;
 }
 
@@ -703,6 +708,7 @@ textarea {
 .metadata-pill {
   display: inline-flex;
   align-items: center;
+  max-width: min(100%, 120px);
   min-height: 20px;
   padding: 2px 7px;
   color: var(--color-text-secondary);
@@ -715,6 +721,9 @@ textarea {
   border: 1px solid var(--color-border);
   border-radius: 999px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
 }
 
 .step-badge.recommended,

@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -33,6 +33,7 @@
     "icon": ["icons/icon.ico"],
     "resources": [
       "backend/validate-agent-kit.mjs",
+      "backend/security-utils.mjs",
       "backend/create-agent-kit.mjs",
       "backend/export-agent-kit-onefile.mjs",
       "backend/render-agent-kit-draft.mjs",

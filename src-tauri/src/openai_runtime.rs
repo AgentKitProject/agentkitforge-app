@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
 
 use crate::ai_providers::{generate_text, selected_model, AiProviderConfig, GenerateTextRequest};
+use crate::security::redact_user_visible_error;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,7 +226,7 @@ async fn build_context(
         return Err(if detail.is_empty() {
             "Agent Kit Context Builder failed without output".to_string()
         } else {
-            detail
+            redact_user_visible_error(&detail)
         });
     }
 

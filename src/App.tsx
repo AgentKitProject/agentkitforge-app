@@ -279,6 +279,7 @@ type ImportAgentKitFromGitResult = {
   metadata?: MyKitEntry;
   inspection: AgentKitCandidateInspection;
   files: string[];
+  warnings: string[];
 };
 
 type CodexExportResult = {
@@ -1953,6 +1954,13 @@ function ImportGitPanel({
               <dd>{isValid ? "Valid" : "Needs review"}</dd>
             </div>
           </dl>
+          {result.warnings.length > 0 && (
+            <div className="inline-warning">
+              {result.warnings.map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+            </div>
+          )}
           {importedPath && (
             <details className="advanced-details">
               <summary>Advanced details</summary>
@@ -2603,7 +2611,7 @@ function BuildScreen({
       setGuidedError("Select an existing kit before saving an update.");
       return;
     }
-    if (!window.confirm("This updates the selected Agent Kit files. Continue?")) {
+    if (!window.confirm("This updates the selected Agent Kit files and may overwrite existing content. Use Save as new kit if you want to keep the original unchanged. Continue?")) {
       return;
     }
     const validationError = validateGuidedBuilder(guidedForm);
@@ -2993,7 +3001,7 @@ function BuildScreen({
       setGeneratedRenderError("Select an existing kit before saving an update.");
       return;
     }
-    if (!window.confirm("This updates the selected Agent Kit files. Continue?")) {
+    if (!window.confirm("This updates the selected Agent Kit files and may overwrite existing content. Use Save as new kit if you want to keep the original unchanged. Continue?")) {
       return;
     }
 
@@ -8504,6 +8512,9 @@ function SettingsScreen({
           placeholder={isBaseUrlRequiredForProvider(providerForm.providerType) ? "Required" : defaultBaseUrl(providerForm.providerType) || "Optional"}
           value={providerForm.baseUrl}
         />
+        <div className="inline-warning">
+          Non-local HTTP providers may send prompts and keys without encryption. Use HTTPS for remote providers; HTTP is allowed only for local addresses such as localhost, 127.0.0.1, or ::1.
+        </div>
 
         <label className="checkbox-row" htmlFor="provider-structured-json">
           <input
@@ -8567,8 +8578,7 @@ function SettingsScreen({
       {isTestingConnection && <LoadingStatus text="Testing provider connection..." />}
 
       <div className="inline-warning">
-        Settings are stored as local app data at {settings.settingsPath || "the app-local settings file"}.
-        API keys are saved there for v0.1; they are not stored in an OS keychain yet.
+        Provider API keys are stored locally in this app&apos;s settings file on your machine. Do not use shared or untrusted machines. You can clear stored keys from Settings.
       </div>
 
       {settingsMessage && <div className="copy-state">{settingsMessage}</div>}
@@ -8739,7 +8749,7 @@ function SettingsScreen({
         AgentKitForge stores provider settings and My Kits locally on this machine. It does not require an account or sync your local library.
       </p>
       <div className="inline-warning">
-        API keys are stored in local app data for v0.1, not an OS keychain. Remove a provider above to clear its saved key.
+        Provider API keys are stored locally in this app&apos;s settings file on your machine. Do not use shared or untrusted machines. Remove a provider above to clear its saved key.
       </div>
       <button className="secondary-button settings-inline-button" disabled={isClearingKey} onClick={clearApiKey} type="button">
         {isClearingKey && <InlineSpinner className="button-spinner" />}
@@ -8810,8 +8820,7 @@ function AboutScreen({ settings }: { settings: PublicSettings }) {
           not require an account and does not sync local library data remotely.
         </p>
         <div className="inline-warning">
-          For v0.1, AI provider API keys are stored in local app data, not an OS keychain. Do not share
-          local app data or commit generated settings files.
+          Provider API keys are stored locally in this app&apos;s settings file on your machine. Do not use shared or untrusted machines. You can clear stored keys from Settings.
         </div>
       </section>
     </div>

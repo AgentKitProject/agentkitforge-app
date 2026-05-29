@@ -4,6 +4,21 @@ AgentKitForge is a desktop app for building, validating, packaging, installing, 
 
 The app currently integrates with `agentkitforge-core` for local template creation and validation. Marketplace features, paid account flows, and infrastructure are intentionally out of scope.
 
+## Security Hardening Notes
+
+The Tauri app uses an explicit capability file and a restrictive content security policy. The policy allows local app assets, Tauri IPC, local images/data fonts, and inline styles needed by the current UI, but does not allow arbitrary external scripts.
+
+Agent Kit imports are treated as untrusted input:
+
+- `.agentkit.zip` imports reject unsafe paths and enforce v0.1 extraction limits: 2,000 entries, 100 MB total uncompressed data, 25 MB per file, and 16 path segments.
+- Git imports disable interactive Git prompts, time out long-running clones, redact Git error details, and skip symlinked files for safety.
+- Git imports use local Git credentials only. AgentKitForge does not store Git provider tokens.
+- Example input documents are size-checked before preview extraction. Text, Markdown, and CSV examples are limited to 2 MB; spreadsheet examples are limited to 10 MB.
+
+Provider API keys are stored locally in this app's settings file on your machine. Do not use shared or untrusted machines. You can clear stored keys from Settings. Provider and Git errors are redacted before being shown in the UI.
+
+Remote custom providers must use HTTPS. HTTP provider URLs are allowed only for local addresses such as `localhost`, `127.0.0.1`, or `::1`.
+
 ## Local Development
 
 Install dependencies:
@@ -36,7 +51,7 @@ cd ../agentkitforge-app
 npm install
 ```
 
-If your core repo lives elsewhere, set `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, set `AGENTKITFORGE_NODE` to the Node executable path.
+During development, the app normally finds `agentkitforge-core` from the sibling workspace path. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged production builds do not honor these development override variables.
 
 Run the desktop app in development mode:
 
@@ -50,6 +65,15 @@ Build and check the app:
 npm run build
 npm run check
 ```
+
+Run the lightweight local smoke suite:
+
+```sh
+npm run check
+npm run build
+```
+
+This runs the TypeScript/Rust check and the frontend production build. It does not create desktop installer artifacts.
 
 Create a packaged Tauri desktop build:
 
@@ -76,6 +100,25 @@ src-tauri/target/release/bundle/nsis/
 The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` installer. Code signing is not configured yet, so Windows may show unsigned-app warnings. macOS and Linux packages are future work unless built manually on those platforms.
 
 The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` into `src-tauri/icons/`. The Windows bundle points at `src-tauri/icons/icon.ico`.
+
+## GitHub Smoke Workflow
+
+The GitHub Actions smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
+
+It uses Node 24 on `windows-latest`, checks out this app plus the sibling `agentkitforge-core` repository, installs both with `npm ci`, builds the core package, and then runs:
+
+```sh
+npm run check
+npm run build
+```
+
+The workflow also has a separate `tauri-build-smoke` job that runs:
+
+```sh
+npm run build:tauri
+```
+
+The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend build path. The workflow does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
 
 ## Branding
 
@@ -333,7 +376,7 @@ After an artifact is created, the result shows artifact type, filename, and frie
 
 ## Use Inside Forge With AI
 
-Open Settings and configure at least one AI provider before using the built-in runtime. API keys are stored locally in the app settings file on this machine and are not committed by the repo. This is a temporary local-storage approach for early development, so do not share local app data or check generated settings files into source control.
+Open Settings and configure at least one AI provider before using the built-in runtime. Provider API keys are stored locally in this app's settings file on your machine. Do not use shared or untrusted machines. You can clear stored keys from Settings.
 
 The default model comes from the selected/default provider. You can choose a known model suggestion or enter a custom model ID in Settings, Build, or Use.
 
@@ -450,7 +493,7 @@ Settings controls local app defaults and AI provider access. Settings are groupe
 
 Use **Test selected provider** after saving provider settings. It sends a very small request with the selected/default model and reports success or a readable failure. Keys are not printed by the app.
 
-Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. For v0.1 provider API keys are stored in that local settings file, not in an OS keychain. Do not share local app data or commit generated settings files.
+Settings are stored in Tauri app-local data as `settings.json`. On Windows this is typically under the user's local app data folder for AgentKitForge. Provider API keys are stored locally in this app's settings file on your machine, not in an OS keychain. Do not use shared or untrusted machines. You can clear stored keys from Settings.
 
 ## About
 

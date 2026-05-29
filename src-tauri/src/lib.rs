@@ -4,7 +4,8 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, Runtime};
 use zip::ZipArchive;
@@ -12,6 +13,14 @@ use zip::ZipArchive;
 mod openai_runtime;
 mod settings;
 mod ai_providers;
+mod security;
+
+use security::redact_user_visible_error;
+
+const MAX_ZIP_ENTRIES: usize = 2000;
+const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
+const MAX_ZIP_FILE_UNCOMPRESSED_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_ZIP_PATH_DEPTH: usize = 16;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -198,6 +207,7 @@ struct ImportAgentKitFromGitResult {
     metadata: Option<MyKitEntry>,
     inspection: AgentKitCandidateInspection,
     files: Vec<String>,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -912,7 +922,7 @@ async fn run_ai_draft_bridge<R: Runtime>(
         return Err(if detail.is_empty() {
             format!("{label} failed without output")
         } else {
-            detail
+            redact_user_visible_error(&detail)
         });
     }
 
@@ -1188,7 +1198,13 @@ fn import_agent_kit_package<R: Runtime>(
         input.force,
     )?;
 
-    let files = extract_agent_kit_zip(&package_path, &destination_root, &extraction_folder)?;
+    let files = match extract_agent_kit_zip(&package_path, &destination_root, &extraction_folder) {
+        Ok(files) => files,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&extraction_folder);
+            return Err(error);
+        }
+    };
     let report = validate_agent_kit(
         app,
         extraction_folder.to_string_lossy().into_owned(),
@@ -1279,6 +1295,7 @@ fn import_agent_kit_from_git<R: Runtime>(
     input: ImportAgentKitFromGitInput,
 ) -> Result<ImportAgentKitFromGitResult, String> {
     let repository_url = clean_git_repository_url(&input.repository_url)?;
+    let redacted_repository_url = redact_user_visible_error(&repository_url);
     let destination_root = canonicalize_directory(&input.destination_root_folder)?;
     let validation_profile = input
         .validation_profile
@@ -1293,18 +1310,22 @@ fn import_agent_kit_from_git<R: Runtime>(
         .map_err(|error| format!("Unable to prepare temporary Git import folder: {error}"))?;
     let clone_folder = temp_root.join("repo");
 
-    clone_git_repository(&repository_url, input.reference.as_deref(), &clone_folder)?;
+    if let Err(error) = clone_git_repository(&repository_url, input.reference.as_deref(), &clone_folder) {
+        let _ = fs::remove_dir_all(&temp_root);
+        return Err(error);
+    }
 
     let inspection = inspect_agent_kit_candidate_inner(&app, &clone_folder.to_string_lossy())?;
     if !inspection.looks_like_agent_kit {
         let _ = fs::remove_dir_all(&temp_root);
         return Ok(ImportAgentKitFromGitResult {
-            repository_url,
+            repository_url: redacted_repository_url,
             imported_path: None,
             validation_report: None,
             metadata: None,
             inspection,
             files: Vec::new(),
+            warnings: Vec::new(),
         });
     }
 
@@ -1313,7 +1334,14 @@ fn import_agent_kit_from_git<R: Runtime>(
         .unwrap_or(repo_folder_name);
     let import_folder =
         unique_or_forced_extraction_folder(&destination_root, &target_folder_name, false)?;
-    let files = copy_agent_kit_directory(&clone_folder, &import_folder)?;
+    let copy_result = match copy_agent_kit_directory(&clone_folder, &import_folder) {
+        Ok(result) => result,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temp_root);
+            let _ = fs::remove_dir_all(&import_folder);
+            return Err(error);
+        }
+    };
     let _ = fs::remove_dir_all(&temp_root);
 
     let report = validate_agent_kit(
@@ -1324,12 +1352,13 @@ fn import_agent_kit_from_git<R: Runtime>(
     let metadata = metadata_entry_from_path(&import_folder, KitLibrarySource::Imported)?;
 
     Ok(ImportAgentKitFromGitResult {
-        repository_url,
+        repository_url: redacted_repository_url,
         imported_path: Some(import_folder.to_string_lossy().into_owned()),
         validation_report: Some(report),
         metadata: Some(metadata),
         inspection,
-        files,
+        files: copy_result.files,
+        warnings: copy_result.warnings,
     })
 }
 
@@ -1655,6 +1684,7 @@ fn resolve_backend_script<R: Runtime>(
 }
 
 fn resolve_node_command() -> Result<String, String> {
+    #[cfg(debug_assertions)]
     if let Ok(node_path) = std::env::var("AGENTKITFORGE_NODE") {
         if !node_path.trim().is_empty() {
             return Ok(node_path);
@@ -2081,8 +2111,12 @@ fn extract_agent_kit_zip(
         .map_err(|error| format!("Unable to open package file: {error}"))?;
     let mut archive =
         ZipArchive::new(file).map_err(|error| format!("Unable to read zip package: {error}"))?;
+    if archive.len() > MAX_ZIP_ENTRIES {
+        return Err(package_too_large_error());
+    }
     let mut files = Vec::new();
     let strip_root = detect_archive_root_folder(&mut archive)?;
+    let mut total_uncompressed_bytes = 0_u64;
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -2095,6 +2129,20 @@ fn extract_agent_kit_zip(
         let relative_path = strip_archive_root_component(&enclosed_name, strip_root.as_deref());
         if relative_path.as_os_str().is_empty() {
             continue;
+        }
+        if path_depth(&relative_path) > MAX_ZIP_PATH_DEPTH {
+            return Err(package_too_large_error());
+        }
+
+        let entry_size = entry.size();
+        if entry_size > MAX_ZIP_FILE_UNCOMPRESSED_BYTES {
+            return Err(package_too_large_error());
+        }
+        total_uncompressed_bytes = total_uncompressed_bytes
+            .checked_add(entry_size)
+            .ok_or_else(package_too_large_error)?;
+        if total_uncompressed_bytes > MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES {
+            return Err(package_too_large_error());
         }
 
         let output_path = extraction_folder.join(&relative_path);
@@ -2120,6 +2168,18 @@ fn extract_agent_kit_zip(
 
     files.sort();
     Ok(files)
+}
+
+fn package_too_large_error() -> String {
+    format!(
+        "This package is too large or contains too many files to import safely. Limits: {MAX_ZIP_ENTRIES} entries, {} MB total uncompressed, {} MB per file, and {MAX_ZIP_PATH_DEPTH} path segments.",
+        MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES / 1024 / 1024,
+        MAX_ZIP_FILE_UNCOMPRESSED_BYTES / 1024 / 1024
+    )
+}
+
+fn path_depth(path: &Path) -> usize {
+    path.components().count()
 }
 
 fn detect_archive_root_folder(
@@ -2228,7 +2288,6 @@ fn inspect_agent_kit_candidate_inner<R: Runtime>(
 fn clean_git_repository_url(url: &str) -> Result<String, String> {
     let repository_url = clean_required_value("Git repository URL", url)?;
     let allowed = repository_url.starts_with("https://")
-        || repository_url.starts_with("http://")
         || repository_url.starts_with("ssh://")
         || repository_url.starts_with("git@");
     if !allowed {
@@ -2258,10 +2317,12 @@ fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) 
         command.arg("--branch").arg(reference);
     }
     command.arg("--").arg(url).arg(destination);
+    command.env("GIT_TERMINAL_PROMPT", "0");
+    command.env("GIT_ASKPASS", "");
+    command.env("SSH_ASKPASS", "");
 
-    let output = command
-        .output()
-        .map_err(|error| format!("AgentKitForge could not start Git. Make sure Git is installed and available on PATH.\n\nTechnical details:\n{error}"))?;
+    let output = run_command_with_timeout(command, security::GIT_CLONE_TIMEOUT)
+        .map_err(|error| format!("AgentKitForge could not start Git. Make sure Git is installed and available on PATH.\n\nTechnical details:\n{}", redact_user_visible_error(&error)))?;
 
     if output.status.success() {
         return Ok(());
@@ -2272,13 +2333,18 @@ fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) 
         "Git clone failed without additional output."
             .to_string()
     } else {
-        stderr
+        redact_user_visible_error(&stderr)
     };
 
     Err(format!("AgentKitForge could not clone this repository.\n\nTechnical details:\n{detail}"))
 }
 
-fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<Vec<String>, String> {
+struct CopyAgentKitDirectoryResult {
+    files: Vec<String>,
+    warnings: Vec<String>,
+}
+
+fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<CopyAgentKitDirectoryResult, String> {
     if !source.is_dir() {
         return Err("Git repository did not produce a folder to import.".to_string());
     }
@@ -2286,9 +2352,16 @@ fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<Vec<Str
     fs::create_dir_all(destination)
         .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
     let mut files = Vec::new();
-    copy_agent_kit_directory_inner(source, source, destination, &mut files)?;
+    let mut skipped_symlinks = Vec::new();
+    copy_agent_kit_directory_inner(source, source, destination, &mut files, &mut skipped_symlinks)?;
     files.sort();
-    Ok(files)
+    skipped_symlinks.sort();
+    let warnings = if skipped_symlinks.is_empty() {
+        Vec::new()
+    } else {
+        vec!["Skipped symlinked files for safety.".to_string()]
+    };
+    Ok(CopyAgentKitDirectoryResult { files, warnings })
 }
 
 fn copy_agent_kit_directory_inner(
@@ -2296,6 +2369,7 @@ fn copy_agent_kit_directory_inner(
     current: &Path,
     destination: &Path,
     files: &mut Vec<String>,
+    skipped_symlinks: &mut Vec<String>,
 ) -> Result<(), String> {
     for entry in fs::read_dir(current)
         .map_err(|error| format!("Unable to read imported repository folder: {error}"))?
@@ -2314,15 +2388,18 @@ fn copy_agent_kit_directory_inner(
         }
 
         let destination_path = destination.join(relative_path);
-        if entry
+        let file_type = entry
             .file_type()
-            .map_err(|error| format!("Unable to inspect repository entry: {error}"))?
-            .is_dir()
-        {
+            .map_err(|error| format!("Unable to inspect repository entry: {error}"))?;
+        if file_type.is_symlink() {
+            skipped_symlinks.push(relative_path.to_string_lossy().replace('\\', "/"));
+            continue;
+        }
+        if file_type.is_dir() {
             ensure_child_path(destination, &destination_path)?;
             fs::create_dir_all(&destination_path)
                 .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
-            copy_agent_kit_directory_inner(root, &source_path, destination, files)?;
+            copy_agent_kit_directory_inner(root, &source_path, destination, files, skipped_symlinks)?;
         } else {
             if let Some(parent) = destination_path.parent() {
                 fs::create_dir_all(parent)
@@ -2336,6 +2413,22 @@ fn copy_agent_kit_directory_inner(
     }
 
     Ok(())
+}
+
+fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<std::process::Output, String> {
+    let mut child = command.spawn().map_err(|error| error.to_string())?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait().map_err(|error| error.to_string())? {
+            Some(_) => return child.wait_with_output().map_err(|error| error.to_string()),
+            None if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Git clone timed out. Confirm the repository URL, branch/ref, and local credentials, then try again.".to_string());
+            }
+            None => thread::sleep(Duration::from_millis(200)),
+        }
+    }
 }
 
 fn read_manifest_scalar(manifest: &str, key: &str) -> Option<String> {
@@ -2382,7 +2475,7 @@ fn parse_node_json_output<T: for<'de> Deserialize<'de>>(
         return Err(if detail.is_empty() {
             format!("{label} failed without output")
         } else {
-            detail
+            redact_user_visible_error(&detail)
         });
     }
 

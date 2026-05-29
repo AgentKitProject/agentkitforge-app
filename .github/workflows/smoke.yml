@@ -1,0 +1,99 @@
+name: Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Check and frontend build
+    runs-on: windows-latest
+    steps:
+      - name: Check out app
+        uses: actions/checkout@v4
+        with:
+          path: agentkitforge-app
+
+      - name: Check out core dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/agentkitforge-core
+          path: agentkitforge-core
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: agentkitforge-app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install core dependencies
+        working-directory: agentkitforge-core
+        run: npm ci
+
+      - name: Build core dependency
+        working-directory: agentkitforge-core
+        run: npm run build
+
+      - name: Install app dependencies
+        working-directory: agentkitforge-app
+        run: npm ci
+
+      - name: Run check
+        working-directory: agentkitforge-app
+        run: npm run check
+
+      - name: Build frontend
+        working-directory: agentkitforge-app
+        run: npm run build
+
+  tauri-build-smoke:
+    name: Tauri build smoke
+    runs-on: windows-latest
+    needs: smoke
+    steps:
+      - name: Check out app
+        uses: actions/checkout@v4
+        with:
+          path: agentkitforge-app
+
+      - name: Check out core dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/agentkitforge-core
+          path: agentkitforge-core
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: agentkitforge-app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install core dependencies
+        working-directory: agentkitforge-core
+        run: npm ci
+
+      - name: Build core dependency
+        working-directory: agentkitforge-core
+        run: npm run build
+
+      - name: Install app dependencies
+        working-directory: agentkitforge-app
+        run: npm ci
+
+      - name: Build Tauri app
+        working-directory: agentkitforge-app
+        run: npm run build:tauri

@@ -21,7 +21,7 @@ try {
 }
 
 async function loadCore() {
-  if (process.env.AGENTKITFORGE_CORE_PATH) {
+  if (process.env.AGENTKITFORGE_ALLOW_DEV_OVERRIDES === "1" && process.env.AGENTKITFORGE_CORE_PATH) {
     const entry = path.join(process.env.AGENTKITFORGE_CORE_PATH, "dist", "index.js");
     return import(pathToFileURL(entry).href);
   }

@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+const MAX_TEXT_EXAMPLE_BYTES = 2 * 1024 * 1024;
+const MAX_SPREADSHEET_EXAMPLE_BYTES = 10 * 1024 * 1024;
+
 const [, , action, input] = process.argv;
 
 if (!action || !input) {
@@ -51,6 +54,11 @@ async function loadExampleDocument(core, filePath, index) {
   }
 
   const stat = await fs.stat(filePath);
+  const maxBytes = kind === "spreadsheet" ? MAX_SPREADSHEET_EXAMPLE_BYTES : MAX_TEXT_EXAMPLE_BYTES;
+  if (stat.size > maxBytes) {
+    throw new Error(`Example input document is too large to preview safely: ${filename}. Limit is ${formatBytes(maxBytes)}.`);
+  }
+
   const document = {
     id: `example-input-${index + 1}`,
     name: filename.replace(/\.[^.]+$/, ""),
@@ -76,7 +84,7 @@ function formatBytes(value) {
 }
 
 async function loadCore() {
-  if (process.env.AGENTKITFORGE_CORE_PATH) {
+  if (process.env.AGENTKITFORGE_ALLOW_DEV_OVERRIDES === "1" && process.env.AGENTKITFORGE_CORE_PATH) {
     const entry = path.join(process.env.AGENTKITFORGE_CORE_PATH, "dist", "index.js");
     return import(pathToFileURL(entry).href);
   }

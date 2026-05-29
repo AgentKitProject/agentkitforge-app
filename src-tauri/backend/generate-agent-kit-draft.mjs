@@ -1,5 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { normalizeSecureBaseUrl, redactUserVisibleError } from "./security-utils.mjs";
 
 const [, , actionOrInputJson, maybeInputJson] = process.argv;
 const providerJson = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
@@ -99,7 +100,7 @@ try {
     currentRevision: core.getCurrentDraftRevision(session),
   });
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(redactUserVisibleError(error instanceof Error ? error.message : String(error)));
   process.exit(1);
 }
 
@@ -368,15 +369,11 @@ function requiredBaseUrl(provider) {
 }
 
 function normalizedBaseUrl(value) {
-  const parsed = new URL(value);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Base URL must start with http:// or https://.");
-  }
-  return value.replace(/\/+$/, "");
+  return normalizeSecureBaseUrl(value);
 }
 
 async function loadCore() {
-  if (process.env.AGENTKITFORGE_CORE_PATH) {
+  if (process.env.AGENTKITFORGE_ALLOW_DEV_OVERRIDES === "1" && process.env.AGENTKITFORGE_CORE_PATH) {
     const entry = path.join(process.env.AGENTKITFORGE_CORE_PATH, "dist", "index.js");
     return import(pathToFileURL(entry).href);
   }
