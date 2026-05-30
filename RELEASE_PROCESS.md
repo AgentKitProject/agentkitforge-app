@@ -60,7 +60,7 @@ Version rules:
 - `fix:` and `fix(security):` create a patch release.
 - Breaking changes before `1.0.0` are treated as minor releases and must be documented.
 
-Release Please does not build or upload installer artifacts. App artifacts are built by a separate release-artifacts workflow/process so release metadata and binary production stay separate.
+When Release Please creates a GitHub Release, the same `release-please.yml` workflow builds and uploads the Windows installer artifacts. This avoids relying on a separate `release: published` workflow trigger, which GitHub can suppress when the release is created with `GITHUB_TOKEN`.
 
 ## Core Dependency
 
@@ -89,19 +89,21 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 ## Release Artifacts
 
 1. Release Please publishes the GitHub Release and tag.
-2. The public app repo `release-artifacts` workflow runs on the published release.
-3. The workflow builds Windows installers on `windows-latest`.
-4. The workflow uploads these assets to the GitHub Release:
+2. The `release-please.yml` workflow runs a dependent `build-release-artifacts` job when a release was created.
+3. The job builds Windows installers on `windows-latest`.
+4. The job uploads these assets to the GitHub Release:
    - `AgentKitForge-${version}-setup.exe`
    - `AgentKitForge-${version}-x64.msi`
    - `AgentKitForge-${version}-checksums.txt`
    - `RELEASE_NOTES.md`
-5. After artifact upload, the workflow dispatches the private infra repo with event type `app-release-published`.
+5. After artifact upload, the job dispatches the private infra repo with event type `app-release-published`.
 6. The private infra repo mirrors the artifacts to `agentkitforge.com`.
 
 The app repo does not store AWS credentials and does not upload directly to S3. Website/S3 mirroring is owned by the private `AgentKitProject/agentkitforge-infra` repository.
 
-Set `AGENTKIT_INFRA_DISPATCH_TOKEN` in this public app repository with the minimum GitHub permissions needed to call `repository_dispatch` on the private infra repo. If this secret is missing, artifact upload still completes, but published release runs fail at the infra dispatch requirement. Manual reruns may skip dispatch when the token is absent.
+Set `AGENTKIT_INFRA_DISPATCH_TOKEN` in this public app repository with the minimum GitHub permissions needed to call `repository_dispatch` on the private infra repo. If this secret is missing, artifact upload still completes, but automatic release runs fail at the infra dispatch requirement so website mirroring is not silently skipped.
+
+`release-artifacts.yml` is manual fallback only. Use it to rebuild or replace assets for an existing GitHub Release by providing the release version. Manual fallback runs verify the release exists, build/upload artifacts, and dispatch the infra mirror workflow when `AGENTKIT_INFRA_DISPATCH_TOKEN` is available.
 
 Do not point the website at artifacts until they exist and the infra mirror has completed.
 

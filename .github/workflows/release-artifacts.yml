@@ -1,14 +1,17 @@
 name: Release Artifacts
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version to rebuild, for example 0.1.0 or v0.1.0"
-        required: false
+        description: "Existing release version to rebuild, for example 0.1.0 or v0.1.0"
+        required: true
         type: string
+      replace_existing_assets:
+        description: "Replace assets if they already exist on the GitHub Release"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -16,7 +19,7 @@ permissions:
 
 jobs:
   windows-artifacts:
-    name: Build Windows installers
+    name: Build Windows installers manual fallback
     runs-on: windows-latest
     steps:
       - name: Check out release tag
@@ -35,20 +38,12 @@ jobs:
         id: release-info
         shell: pwsh
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_URL: ${{ github.event.release.html_url }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          $tag = ""
-          if ($env:EVENT_NAME -eq "release") {
-            $tag = $env:RELEASE_TAG
-          } elseif (-not [string]::IsNullOrWhiteSpace($env:INPUT_VERSION)) {
-            $tag = $env:INPUT_VERSION
-          }
+          $tag = $env:INPUT_VERSION
 
           if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw "Unable to determine release version. Provide workflow_dispatch input 'version' or run from a published release."
+            throw "Unable to determine release version. Provide workflow_dispatch input 'version'."
           }
 
           if (-not $tag.StartsWith("v")) {
@@ -62,7 +57,6 @@ jobs:
 
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          "release_url=$env:RELEASE_URL" >> $env:GITHUB_OUTPUT
 
       - name: Check out requested tag
         shell: pwsh
@@ -81,6 +75,19 @@ jobs:
           if ($packageVersion -ne $env:VERSION) {
             throw "package.json version '$packageVersion' does not match release version '$env:VERSION'."
           }
+
+      - name: Verify GitHub Release exists
+        id: github-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release-info.outputs.tag }}
+        run: |
+          $releaseUrl = gh release view $env:TAG --json url --jq .url
+          if ([string]::IsNullOrWhiteSpace($releaseUrl)) {
+            throw "GitHub Release '$env:TAG' does not exist."
+          }
+          "release_url=$releaseUrl" >> $env:GITHUB_OUTPUT
 
       - name: Install dependencies
         run: npm ci
@@ -130,23 +137,21 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-info.outputs.tag }}
+          REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
         run: |
-          gh release upload $env:TAG `
-            "${{ steps.artifacts.outputs.setup }}" `
-            "${{ steps.artifacts.outputs.msi }}" `
-            "${{ steps.artifacts.outputs.checksums }}" `
-            "RELEASE_NOTES.md" `
-            --clobber
+          $args = @(
+            "release", "upload", $env:TAG,
+            "${{ steps.artifacts.outputs.setup }}",
+            "${{ steps.artifacts.outputs.msi }}",
+            "${{ steps.artifacts.outputs.checksums }}",
+            "RELEASE_NOTES.md"
+          )
 
-      - name: Require infra dispatch token for published releases
-        if: ${{ github.event_name == 'release' }}
-        shell: pwsh
-        env:
-          INFRA_DISPATCH_TOKEN: ${{ secrets.AGENTKIT_INFRA_DISPATCH_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:INFRA_DISPATCH_TOKEN)) {
-            throw "AGENTKIT_INFRA_DISPATCH_TOKEN is required to dispatch the private infra mirror workflow after a published release."
+          if ($env:REPLACE_EXISTING_ASSETS -eq "true") {
+            $args += "--clobber"
           }
+
+          gh @args
 
       - name: Trigger private infra mirror
         shell: pwsh
@@ -154,7 +159,7 @@ jobs:
           INFRA_DISPATCH_TOKEN: ${{ secrets.AGENTKIT_INFRA_DISPATCH_TOKEN }}
           VERSION: ${{ steps.release-info.outputs.version }}
           TAG: ${{ steps.release-info.outputs.tag }}
-          RELEASE_URL: ${{ steps.release-info.outputs.release_url }}
+          RELEASE_URL: ${{ steps.github-release.outputs.release_url }}
           REPOSITORY: AgentKitProject/agentkitforge-app
         run: |
           if ([string]::IsNullOrWhiteSpace($env:INFRA_DISPATCH_TOKEN)) {
