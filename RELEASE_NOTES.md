@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.1.1](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.1.0...v0.1.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* add automatic release artifact mirroring ([3c49f0d](https://github.com/AgentKitProject/agentkitforge-app/commit/3c49f0deb6b4c8901548e8df31e5b986701c8ff4))
+
 ## 0.1.0 (2026-05-30)
 
 
