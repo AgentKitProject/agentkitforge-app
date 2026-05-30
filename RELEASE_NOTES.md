@@ -1,6 +1,6 @@
 # AgentKitForge Release Notes
 
-## v0.1.0 Public Preview
+## v0.0.0 Public Preview
 
 ### Overview
 
