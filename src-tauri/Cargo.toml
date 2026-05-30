@@ -1,0 +1,21 @@
+[package]
+name = "agentkitforge-app"
+version = "0.1.0"
+description = "Desktop app for building, validating, packaging, installing, and using Agent Kits."
+authors = ["AgentKitForge"]
+edition = "2021"
+
+[lib]
+name = "agentkitforge_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rfd = "0.15"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+zip = "4"

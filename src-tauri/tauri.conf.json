@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentKitForge",
+  "version": "0.1.1",
+  "identifier": "com.agentkitforge.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev:frontend",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build:frontend",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AgentKitForge",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "AgentKitForge",
+    "shortDescription": "Desktop app for portable Agent Kits.",
+    "longDescription": "AgentKitForge is a desktop app for building, validating, packaging, installing, and using portable Agent Kits.",
+    "copyright": "Copyright (c) AgentKitForge",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "backend/validate-agent-kit.mjs",
+      "backend/security-utils.mjs",
+      "backend/create-agent-kit.mjs",
+      "backend/export-agent-kit-onefile.mjs",
+      "backend/render-agent-kit-draft.mjs",
+      "backend/generate-agent-kit-draft.mjs",
+      "backend/render-generated-agent-kit-draft.mjs",
+      "backend/package-agent-kit.mjs",
+      "backend/build-agent-kit-context.mjs",
+      "backend/prepared-prompts.mjs",
+      "backend/agent-kit-app-support.mjs",
+      "backend/export-agent-kit-codex.mjs",
+      "backend/export-agent-kit-claude-code.mjs"
+    ]
+  }
+}
