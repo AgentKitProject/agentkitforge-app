@@ -8,6 +8,7 @@
       "component": "agentkitforge-app",
       "package-name": "agentkitforge-app",
       "release-type": "node",
+      "initial-version": "0.1.0",
       "changelog-path": "RELEASE_NOTES.md",
       "include-component-in-tag": false,
       "include-v-in-tag": true,
