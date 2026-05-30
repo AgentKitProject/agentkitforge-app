@@ -64,21 +64,15 @@ Release Please does not build or upload installer artifacts. App artifacts are b
 
 ## Core Dependency
 
-`agentkitforge-core` is not published to npm yet. The desktop app currently consumes the core package by Git tag.
+The desktop app consumes `@agentkitforge/core` from npm using semver.
 
 Current app dependency format:
 
 ```json
-"@agentkitforge/core": "github:AgentKitProject/agentkitforge-core#0.1.0"
+"@agentkitforge/core": "^0.1.1"
 ```
 
-For a different owner, use this pattern:
-
-```json
-"@agentkitforge/core": "github:<owner>/agentkitforge-core#0.1.0"
-```
-
-Do not publish `agentkitforge-core` to npm as part of the app release process.
+Core package publishing is handled separately from the app release process.
 
 ## Checksums
 

@@ -30,13 +30,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Configure Git access for core dependency
-        env:
-          CORE_TOKEN: ${{ secrets.AGENTKITFORGE_CORE_READ_TOKEN || github.token }}
-        run: |
-          git config --global url."https://x-access-token:$env:CORE_TOKEN@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://x-access-token:$env:CORE_TOKEN@github.com/".insteadOf "git@github.com:"
-
       - name: Install app dependencies
         working-directory: agentkitforge-app
         run: npm ci
@@ -68,13 +61,6 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Configure Git access for core dependency
-        env:
-          CORE_TOKEN: ${{ secrets.AGENTKITFORGE_CORE_READ_TOKEN || github.token }}
-        run: |
-          git config --global url."https://x-access-token:$env:CORE_TOKEN@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://x-access-token:$env:CORE_TOKEN@github.com/".insteadOf "git@github.com:"
 
       - name: Install app dependencies
         working-directory: agentkitforge-app

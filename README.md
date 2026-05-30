@@ -27,10 +27,10 @@ Install dependencies:
 npm install
 ```
 
-The app consumes the released core package by Git tag:
+The app consumes the released core package from npm using semver:
 
 ```json
-"@agentkitforge/core": "github:AgentKitProject/agentkitforge-core#v0.1.0"
+"@agentkitforge/core": "^0.1.1"
 ```
 
 For core development, a sibling checkout is still useful:
@@ -105,7 +105,7 @@ The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` int
 
 The GitHub Actions smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
 
-It uses Node 26 on `windows-latest`, installs the app with `npm ci`, and resolves `@agentkitforge/core` from the pinned Git tag in `package-lock.json`. It then runs:
+It uses Node 26 on `windows-latest`, installs the app with `npm ci`, and resolves `@agentkitforge/core` from npm through `package-lock.json`. It then runs:
 
 ```sh
 npm run check
@@ -120,7 +120,7 @@ npm run build:tauri
 
 The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend build path. The workflow does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
 
-If `agentkitforge-core` is private, add a repository secret named `AGENTKITFORGE_CORE_READ_TOKEN` with read access to the core repository. The workflow uses that token to let `npm ci` fetch the pinned Git dependency. If the core repository is public or otherwise accessible to `GITHUB_TOKEN`, the secret is not required.
+The smoke workflow does not build `agentkitforge-core`; it consumes the published `@agentkitforge/core` package from npm.
 
 ## Branding
 
