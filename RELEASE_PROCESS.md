@@ -88,13 +88,22 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 
 ## Release Artifacts
 
-1. Build app artifacts from the released tag using the separate release-artifacts workflow/process.
-2. Upload installer artifacts to the GitHub Release only when ready.
-3. Upload `checksums.txt`.
-4. Verify the release assets download correctly.
-5. Update the website mirror/download links later from the private infrastructure repository.
+1. Release Please publishes the GitHub Release and tag.
+2. The public app repo `release-artifacts` workflow runs on the published release.
+3. The workflow builds Windows installers on `windows-latest`.
+4. The workflow uploads these assets to the GitHub Release:
+   - `AgentKitForge-${version}-setup.exe`
+   - `AgentKitForge-${version}-x64.msi`
+   - `AgentKitForge-${version}-checksums.txt`
+   - `RELEASE_NOTES.md`
+5. After artifact upload, the workflow dispatches the private infra repo with event type `app-release-published`.
+6. The private infra repo mirrors the artifacts to `agentkitforge.com`.
 
-Do not point the website at artifacts until they exist.
+The app repo does not store AWS credentials and does not upload directly to S3. Website/S3 mirroring is owned by the private `AgentKitProject/agentkitforge-infra` repository.
+
+Set `AGENTKIT_INFRA_DISPATCH_TOKEN` in this public app repository with the minimum GitHub permissions needed to call `repository_dispatch` on the private infra repo. If this secret is missing, artifact upload still completes, but published release runs fail at the infra dispatch requirement. Manual reruns may skip dispatch when the token is absent.
+
+Do not point the website at artifacts until they exist and the infra mirror has completed.
 
 ## Current Release Caveats
 
