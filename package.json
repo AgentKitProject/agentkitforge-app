@@ -1,7 +1,7 @@
 {
   "name": "agentkitforge-app",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Desktop app for building, validating, packaging, installing, and using Agent Kits.",
   "author": "AgentKitForge",
   "type": "module",

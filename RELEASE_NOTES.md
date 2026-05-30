@@ -1,5 +1,19 @@
 # AgentKitForge Release Notes
 
+## 1.0.0 (2026-05-30)
+
+
+### Features
+
+* prepare initial app public preview ([84aad1d](https://github.com/AgentKitProject/agentkitforge-app/commit/84aad1d47b78b9434be8a8c93a13b9dbfce39cd2))
+
+
+### Bug Fixes
+
+* set initial app release baseline ([35c1227](https://github.com/AgentKitProject/agentkitforge-app/commit/35c122700de0fd75e174852d926010c56cecf89a))
+* use npm core package ([ed5997c](https://github.com/AgentKitProject/agentkitforge-app/commit/ed5997c1b49da42cae102fe77706dbf03953da66))
+* use npm core package ([5193c5d](https://github.com/AgentKitProject/agentkitforge-app/commit/5193c5d083a5a5127278c4ade59b2b18817261fa))
+
 ## v0.0.0 Public Preview
 
 ### Overview
