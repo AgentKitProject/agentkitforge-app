@@ -19,6 +19,7 @@ This process is for AgentKitForge desktop app releases.
 Run:
 
 ```powershell
+npm run build:backend
 npm run check
 npm run smoke
 npm run build:tauri
@@ -28,6 +29,17 @@ Windows artifacts are expected under:
 
 - `src-tauri/target/release/bundle/msi/`
 - `src-tauri/target/release/bundle/nsis/`
+
+macOS artifacts, when built on macOS, are expected under:
+
+- `src-tauri/target/release/bundle/dmg/`
+- `src-tauri/target/release/bundle/macos/`
+
+Linux artifacts, when built on Linux, are expected under:
+
+- `src-tauri/target/release/bundle/appimage/`
+- `src-tauri/target/release/bundle/deb/`
+- `src-tauri/target/release/bundle/rpm/`
 
 Suggested public artifact names:
 
@@ -90,7 +102,7 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 
 1. Release Please publishes the GitHub Release and tag.
 2. The `release-please.yml` workflow runs a dependent `build-release-artifacts` job when a release was created.
-3. The job builds Windows installers on `windows-latest`. The build bundles backend bridge JavaScript, `@agentkitforge/core`, JavaScript dependencies, and a Node sidecar before Tauri packaging.
+3. The automatic job builds Windows installers on `windows-latest`. Windows is currently the main supported public release platform.
 4. The job uploads these assets to the GitHub Release:
    - `AgentKitForge-${version}-setup.exe`
    - `AgentKitForge-${version}-x64.msi`
@@ -103,7 +115,14 @@ The app repo does not store AWS credentials and does not upload directly to S3. 
 
 Set `AGENTKIT_INFRA_DISPATCH_TOKEN` in this public app repository with the minimum GitHub permissions needed to call `repository_dispatch` on the private infra repo. If this secret is missing, artifact upload still completes, but automatic release runs fail at the infra dispatch requirement so website mirroring is not silently skipped.
 
-`release-artifacts.yml` is manual fallback only. Use it to rebuild or replace assets for an existing GitHub Release by providing the release version. Manual fallback runs verify the release exists, build/upload artifacts, and dispatch the infra mirror workflow when `AGENTKIT_INFRA_DISPATCH_TOKEN` is available.
+`release-artifacts.yml` is manual fallback only. Use it to rebuild or replace assets for an existing GitHub Release by providing the release version. The fallback accepts a `platforms` input:
+
+- `windows`
+- `macos`
+- `linux`
+- `all`
+
+Manual fallback runs verify the release exists, build/upload selected platform artifacts, generate per-platform SHA-256 checksum files, and dispatch the infra mirror workflow when `AGENTKIT_INFRA_DISPATCH_TOKEN` is available. The dispatch payload includes the selected platform list.
 
 Do not point the website at artifacts until they exist and the infra mirror has completed.
 
@@ -111,5 +130,8 @@ Do not point the website at artifacts until they exist and the infra mirror has 
 
 - Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions before checksums are generated. Local development builds are unsigned.
 - Auto-update is not configured yet.
-- macOS and Linux release packaging are future work unless built manually in those environments. The backend runtime architecture is prepared for platform sidecars, but public packaging/signing/notarization is not configured yet.
+- macOS and Linux artifacts can be built by the manual fallback workflow once platform publishing is enabled, but they are not public download targets yet.
+- macOS signing and notarization are not configured yet. Any macOS artifacts produced before that work are unsigned and should be treated as preview/validation artifacts.
+- Linux artifacts are unsigned except for SHA-256 checksums unless a separate signing process is configured.
+- Do not list macOS or Linux on the website Download page until the product decision says those platforms are public release targets.
 - AgentKitForge infrastructure and marketplace/backend release work lives outside this public app repository.

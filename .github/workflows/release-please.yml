@@ -109,6 +109,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build backend runtime
+        run: npm run build:backend
+
       - name: Run checks
         run: npm run check
 
@@ -193,6 +196,7 @@ jobs:
               tag = $env:TAG
               repository = $env:REPOSITORY
               release_url = $env:RELEASE_URL
+              platforms = @("windows")
             }
           } | ConvertTo-Json -Depth 5 -Compress
 

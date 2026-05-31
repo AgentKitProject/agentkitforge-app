@@ -4,9 +4,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing release version to rebuild, for example 0.1.0 or v0.1.0"
+        description: "Existing release version to rebuild, for example 0.2.0 or v0.2.0"
         required: true
         type: string
+      platforms:
+        description: "Platforms to build: windows, macos, linux, or all"
+        required: false
+        default: windows
+        type: choice
+        options:
+          - windows
+          - macos
+          - linux
+          - all
       replace_existing_assets:
         description: "Replace assets if they already exist on the GitHub Release"
         required: false
@@ -18,22 +28,16 @@ permissions:
   actions: read
 
 jobs:
-  windows-artifacts:
-    name: Build Windows installers manual fallback
-    runs-on: windows-latest
+  prepare:
+    name: Prepare artifact build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
+      platforms: ${{ steps.platforms.outputs.platforms }}
+      version: ${{ steps.release-info.outputs.version }}
+      tag: ${{ steps.release-info.outputs.tag }}
+      release_url: ${{ steps.github-release.outputs.release_url }}
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Determine release version
         id: release-info
         shell: pwsh
@@ -58,39 +62,106 @@ jobs:
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
 
-      - name: Check out requested tag
+      - name: Select platforms
+        id: platforms
         shell: pwsh
         env:
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          $selection = $env:INPUT_PLATFORMS
+          if ([string]::IsNullOrWhiteSpace($selection)) {
+            $selection = "windows"
+          }
+
+          $platforms = switch ($selection) {
+            "windows" { @(@{ platform = "windows"; os = "windows-latest" }) }
+            "macos" { @(@{ platform = "macos"; os = "macos-latest" }) }
+            "linux" { @(@{ platform = "linux"; os = "ubuntu-latest" }) }
+            "all" {
+              @(
+                @{ platform = "windows"; os = "windows-latest" },
+                @{ platform = "macos"; os = "macos-latest" },
+                @{ platform = "linux"; os = "ubuntu-latest" }
+              )
+            }
+            default { throw "Unsupported platforms input '$selection'. Use windows, macos, linux, or all." }
+          }
+
+          $matrix = @{ include = $platforms } | ConvertTo-Json -Depth 5 -Compress
+          $platformNames = ($platforms | ForEach-Object { $_.platform }) -join ","
+
+          "matrix=$matrix" >> $env:GITHUB_OUTPUT
+          "platforms=$platformNames" >> $env:GITHUB_OUTPUT
+
+      - name: Verify GitHub Release exists
+        id: github-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.release-info.outputs.tag }}
         run: |
-          git fetch --tags --force
-          git checkout $env:TAG
+          release_url="$(gh release view "$TAG" --json url --jq .url)"
+          if [ -z "$release_url" ]; then
+            echo "GitHub Release '$TAG' does not exist." >&2
+            exit 1
+          fi
+          echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
+
+  build-artifacts:
+    name: Build ${{ matrix.platform }} artifacts
+    runs-on: ${{ matrix.os }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - name: Check out requested tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux Tauri dependencies
+        if: ${{ matrix.platform == 'linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            rpm
 
       - name: Verify release version
         shell: pwsh
         env:
-          VERSION: ${{ steps.release-info.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $packageVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
           if ($packageVersion -ne $env:VERSION) {
             throw "package.json version '$packageVersion' does not match release version '$env:VERSION'."
           }
 
-      - name: Verify GitHub Release exists
-        id: github-release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release-info.outputs.tag }}
-        run: |
-          $releaseUrl = gh release view $env:TAG --json url --jq .url
-          if ([string]::IsNullOrWhiteSpace($releaseUrl)) {
-            throw "GitHub Release '$env:TAG' does not exist."
-          }
-          "release_url=$releaseUrl" >> $env:GITHUB_OUTPUT
-
       - name: Install dependencies
         run: npm ci
+
+      - name: Build backend runtime
+        run: npm run build:backend
+
+      - name: Verify backend bundle exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "src-tauri/backend-dist")) {
+            throw "src-tauri/backend-dist was not created."
+          }
 
       - name: Run checks
         run: npm run check
@@ -104,11 +175,11 @@ jobs:
       - name: Verify Tauri sidecar output
         run: npm run check:tauri-sidecar
 
-      - name: Collect release artifacts
-        id: artifacts
+      - name: Collect Windows artifacts
+        if: ${{ matrix.platform == 'windows' }}
         shell: pwsh
         env:
-          VERSION: ${{ steps.release-info.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $assetDir = Join-Path $PWD "release-assets"
           New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
@@ -123,35 +194,94 @@ jobs:
             throw "No MSI installer found."
           }
 
-          $setupOut = Join-Path $assetDir "AgentKitForge-$env:VERSION-setup.exe"
-          $msiOut = Join-Path $assetDir "AgentKitForge-$env:VERSION-x64.msi"
-          $checksumsOut = Join-Path $assetDir "AgentKitForge-$env:VERSION-checksums.txt"
+          Copy-Item -LiteralPath $setupSource.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-setup.exe") -Force
+          Copy-Item -LiteralPath $msiSource.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-x64.msi") -Force
 
-          Copy-Item -LiteralPath $setupSource.FullName -Destination $setupOut -Force
-          Copy-Item -LiteralPath $msiSource.FullName -Destination $msiOut -Force
+      - name: Collect macOS artifacts
+        if: ${{ matrix.platform == 'macos' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RUNNER_ARCH_NAME: ${{ runner.arch }}
+        run: |
+          $assetDir = Join-Path $PWD "release-assets"
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
 
-          Get-FileHash $setupOut, $msiOut -Algorithm SHA256 |
+          $arch = $env:RUNNER_ARCH_NAME.ToLowerInvariant()
+          if ($arch -eq "x64") { $arch = "x64" }
+          elseif ($arch -eq "arm64") { $arch = "arm64" }
+
+          $dmg = Get-ChildItem "src-tauri/target/release/bundle/dmg" -Filter "*.dmg" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($dmg) {
+            Copy-Item -LiteralPath $dmg.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-macos-$arch.dmg") -Force
+          }
+
+          $app = Get-ChildItem "src-tauri/target/release/bundle/macos" -Filter "*.app" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($app) {
+            $zipOut = Join-Path $assetDir "AgentKitForge-$env:VERSION-macos-$arch-app.zip"
+            Compress-Archive -LiteralPath $app.FullName -DestinationPath $zipOut -Force
+          }
+
+          if (-not (Get-ChildItem $assetDir -File)) {
+            throw "No macOS DMG or app bundle artifact found."
+          }
+
+      - name: Collect Linux artifacts
+        if: ${{ matrix.platform == 'linux' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $assetDir = Join-Path $PWD "release-assets"
+          New-Item -ItemType Directory -Force -Path $assetDir | Out-Null
+
+          $appImage = Get-ChildItem "src-tauri/target/release/bundle/appimage" -Filter "*.AppImage" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($appImage) {
+            Copy-Item -LiteralPath $appImage.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-linux-x86_64.AppImage") -Force
+          }
+
+          $deb = Get-ChildItem "src-tauri/target/release/bundle/deb" -Filter "*.deb" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($deb) {
+            Copy-Item -LiteralPath $deb.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-linux-amd64.deb") -Force
+          }
+
+          $rpm = Get-ChildItem "src-tauri/target/release/bundle/rpm" -Filter "*.rpm" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($rpm) {
+            Copy-Item -LiteralPath $rpm.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-linux-x86_64.rpm") -Force
+          }
+
+          if (-not (Get-ChildItem $assetDir -File)) {
+            throw "No Linux AppImage, deb, or rpm artifact found."
+          }
+
+      - name: Generate platform checksums
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          $assetDir = Join-Path $PWD "release-assets"
+          $checksumsOut = Join-Path $assetDir "AgentKitForge-$env:VERSION-$env:PLATFORM-checksums.txt"
+
+          Get-ChildItem $assetDir -File |
+            Where-Object { $_.Name -notlike "*checksums.txt" } |
+            Get-FileHash -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($_.Path))" } |
             Set-Content -LiteralPath $checksumsOut -Encoding ascii
-
-          "setup=$setupOut" >> $env:GITHUB_OUTPUT
-          "msi=$msiOut" >> $env:GITHUB_OUTPUT
-          "checksums=$checksumsOut" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifacts to GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.release-info.outputs.tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
           REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
         run: |
-          $args = @(
-            "release", "upload", $env:TAG,
-            "${{ steps.artifacts.outputs.setup }}",
-            "${{ steps.artifacts.outputs.msi }}",
-            "${{ steps.artifacts.outputs.checksums }}",
-            "RELEASE_NOTES.md"
-          )
+          $assetFiles = Get-ChildItem "release-assets" -File | ForEach-Object { $_.FullName }
+          if (-not $assetFiles) {
+            throw "No release assets were collected."
+          }
+
+          $args = @("release", "upload", $env:TAG) + $assetFiles
 
           if ($env:REPLACE_EXISTING_ASSETS -eq "true") {
             $args += "--clobber"
@@ -159,37 +289,68 @@ jobs:
 
           gh @args
 
+  dispatch-infra:
+    name: Dispatch private infra mirror
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build-artifacts
+    if: ${{ success() }}
+    steps:
+      - name: Check out requested tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Upload release notes to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
+        run: |
+          args=(release upload "$TAG" "RELEASE_NOTES.md")
+
+          if [ "$REPLACE_EXISTING_ASSETS" = "true" ]; then
+            args+=(--clobber)
+          fi
+
+          gh "${args[@]}"
+
       - name: Trigger private infra mirror
-        shell: pwsh
         env:
           INFRA_DISPATCH_TOKEN: ${{ secrets.AGENTKIT_INFRA_DISPATCH_TOKEN }}
-          VERSION: ${{ steps.release-info.outputs.version }}
-          TAG: ${{ steps.release-info.outputs.tag }}
-          RELEASE_URL: ${{ steps.github-release.outputs.release_url }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_URL: ${{ needs.prepare.outputs.release_url }}
           REPOSITORY: AgentKitProject/agentkitforge-app
+          PLATFORMS: ${{ needs.prepare.outputs.platforms }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:INFRA_DISPATCH_TOKEN)) {
-            Write-Host "AGENTKIT_INFRA_DISPATCH_TOKEN is not set; skipping infra dispatch for this manual run."
+          if [ -z "$INFRA_DISPATCH_TOKEN" ]; then
+            echo "AGENTKIT_INFRA_DISPATCH_TOKEN is not set; skipping infra dispatch for this manual run."
             exit 0
-          }
+          fi
 
-          $payload = @{
-            event_type = "app-release-published"
-            client_payload = @{
-              version = $env:VERSION
-              tag = $env:TAG
-              repository = $env:REPOSITORY
-              release_url = $env:RELEASE_URL
-            }
-          } | ConvertTo-Json -Depth 5 -Compress
+          payload="$(jq -n \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg repository "$REPOSITORY" \
+            --arg release_url "$RELEASE_URL" \
+            --arg platforms "$PLATFORMS" \
+            '{
+              event_type: "app-release-published",
+              client_payload: {
+                version: $version,
+                tag: $tag,
+                repository: $repository,
+                release_url: $release_url,
+                platforms: ($platforms | split(","))
+              }
+            }')"
 
-          Invoke-RestMethod `
-            -Method Post `
-            -Uri "https://api.github.com/repos/AgentKitProject/agentkitforge-infra/dispatches" `
-            -Headers @{
-              Authorization = "Bearer $env:INFRA_DISPATCH_TOKEN"
-              Accept = "application/vnd.github+json"
-              "X-GitHub-Api-Version" = "2022-11-28"
-            } `
-            -Body $payload `
-            -ContentType "application/json"
+          curl -fsSL \
+            -X POST \
+            -H "Authorization: Bearer $INFRA_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/AgentKitProject/agentkitforge-infra/dispatches \
+            -d "$payload"
