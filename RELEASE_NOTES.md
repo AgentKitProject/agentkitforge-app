@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.2.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.1.1...v0.2.0) (2026-05-31)
+
+
+### Features
+
+* allowing app to run on all platforms ([21bb759](https://github.com/AgentKitProject/agentkitforge-app/commit/21bb7594a0ad7e4351162952194d40792f2af36e))
+
 ## [0.1.1](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.1.0...v0.1.1) (2026-05-30)
 
 
