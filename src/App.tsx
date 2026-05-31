@@ -3472,7 +3472,7 @@ function BuildScreen({
           <input
             id="build-output-folder"
             onChange={(event) => updateForm("outputFolder", event.target.value)}
-            placeholder="C:\\kits"
+            placeholder="Documents/AgentKitForge/Kits"
             value={form.outputFolder}
           />
           <button
@@ -3570,7 +3570,7 @@ function BuildScreen({
             <input
               id="draft-json-file"
               onChange={(event) => updateDraftForm("draftFilePath", event.target.value)}
-              placeholder="C:\\kits\\drafts\\agent-kit-draft.json"
+              placeholder="Documents/AgentKitForge/Drafts/agent-kit-draft.json"
               value={draftForm.draftFilePath}
             />
             <button
@@ -3594,7 +3594,7 @@ function BuildScreen({
             <input
               id="draft-output-folder"
               onChange={(event) => updateDraftForm("outputFolder", event.target.value)}
-              placeholder="C:\\kits\\rendered-agent-kit"
+              placeholder="Documents/AgentKitForge/Kits/rendered-agent-kit"
               value={draftForm.outputFolder}
             />
             <button
@@ -4456,7 +4456,7 @@ function ValidateScreen({
               onKitPathChange(event.target.value);
               setReport(null);
             }}
-            placeholder="C:\\kits\\agent-kit"
+            placeholder="Documents/AgentKitForge/Kits/agent-kit"
             value={currentKitPath}
           />
           <button
@@ -5380,7 +5380,7 @@ function UseScreen({
                 setOutputPath(event.target.value);
                 setResult(null);
               }}
-              placeholder="C:\\kits\\exports\\agent-kit.md"
+              placeholder="Documents/AgentKitForge/Exports/agent-kit.md"
               value={outputPath}
             />
             <button
@@ -6042,7 +6042,7 @@ function InstallTargetsScreen({
           <FieldError message={fieldErrors.kitPath} />
           {selectedKit && <SelectedKitSummaryCard kit={selectedKit} />}
 
-          <LabelWithHelp htmlFor="codex-destination" label="Codex destination" help="Choose the skills folder Codex reads from. AgentKitForge remembers this destination." />
+          <LabelWithHelp htmlFor="codex-destination" label="Codex destination" help="Choose the skills folder Codex reads from. This can differ by operating system and local setup." />
           <div className="friendly-location-row">
             <span>Destination: {destinationSkillsDir ? "Codex skills folder" : "Choose Codex skills folder"}</span>
             <button className="secondary-button compact-button" disabled={isSelectingDestination || isExporting} onClick={selectDestinationFolder} type="button">
@@ -6146,7 +6146,7 @@ function InstallTargetsScreen({
           <FieldError message={claudeFieldErrors.kitPath} />
           {selectedKit && <SelectedKitSummaryCard kit={selectedKit} />}
 
-          <LabelWithHelp htmlFor="claude-destination" label="Claude Code destination" help="Choose the plugins folder Claude Code reads from. AgentKitForge remembers this destination." />
+          <LabelWithHelp htmlFor="claude-destination" label="Claude Code destination" help="Choose the plugins folder Claude Code reads from. This can differ by operating system and local setup." />
           <div className="friendly-location-row">
             <span>Destination: {claudeDestinationDir ? "Claude Code plugins folder" : "Choose Claude Code plugins folder"}</span>
             <button className="secondary-button compact-button" disabled={isSelectingClaudeDestination || isExportingClaude} onClick={selectClaudeDestinationFolder} type="button">
@@ -8599,7 +8599,7 @@ function SettingsScreen({
         <input
           id="default-output-folder"
           onChange={(event) => setDefaultOutputFolder(event.target.value)}
-          placeholder="C:\\kits\\output"
+          placeholder="Documents/AgentKitForge/Kits"
           value={defaultOutputFolder}
         />
         <button
@@ -9188,7 +9188,7 @@ function GeneratedDraftResults({
           <input
             id="generated-render-output"
             onChange={(event) => onRenderOutputFolderChange(event.target.value)}
-            placeholder="C:\\kits\\generated-agent-kit"
+            placeholder="Documents/AgentKitForge/Kits/generated-agent-kit"
             value={renderOutputFolder}
           />
           <button

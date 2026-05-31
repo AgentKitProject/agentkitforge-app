@@ -69,7 +69,7 @@ The desktop app consumes `@agentkitforge/core` from npm using semver.
 Current app dependency format:
 
 ```json
-"@agentkitforge/core": "^0.1.1"
+"@agentkitforge/core": "^0.2.0"
 ```
 
 Core package publishing is handled separately from the app release process.
@@ -109,7 +109,7 @@ Do not point the website at artifacts until they exist and the infra mirror has 
 
 ## Current Release Caveats
 
-- Code signing is not configured yet.
+- Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions before checksums are generated. Local development builds are unsigned.
 - Auto-update is not configured yet.
 - macOS and Linux release packaging are future work unless built manually in those environments.
 - AgentKitForge infrastructure and marketplace/backend release work lives outside this public app repository.

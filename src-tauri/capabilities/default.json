@@ -4,6 +4,7 @@
   "description": "Default desktop capability for the local AgentKitForge app shell.",
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "opener:default"
   ]
 }

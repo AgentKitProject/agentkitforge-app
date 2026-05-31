@@ -118,7 +118,7 @@ Runtime AI provider calls, provider settings, local API key storage, connection 
 - No organization/private repository sync yet.
 - Git import can use local Git credentials for read-only clone access, but there is no in-app OAuth flow or Git token storage.
 - No auto-update support yet.
-- Code signing is not configured yet.
+- Public Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions. SmartScreen reputation may still build over time for early preview releases.
 - macOS and Linux release packaging are future work unless built manually in those environments.
 - File upload/RAG is not implemented for Use mode. Build with AI can use limited example input document support for source notes and metadata.
 - Spreadsheet example document support is limited in v0.1. Text, Markdown, and CSV extraction are more reliable than Excel previews.
