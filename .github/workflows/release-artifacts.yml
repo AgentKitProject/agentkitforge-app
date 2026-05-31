@@ -97,13 +97,21 @@ jobs:
         id: github-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: AgentKitProject/agentkitforge-app
           TAG: ${{ steps.release-info.outputs.tag }}
+          VERSION: ${{ steps.release-info.outputs.version }}
         run: |
-          release_url="$(gh release view "$TAG" --json url --jq .url)"
+          SOURCE_REPO="${SOURCE_REPO:-AgentKitProject/agentkitforge-app}"
+          echo "SOURCE_REPO=$SOURCE_REPO"
+          echo "VERSION=$VERSION"
+          echo "TAG=$TAG"
+
+          release_url="$(gh release view "$TAG" --repo "$SOURCE_REPO" --json url --jq .url)"
           if [ -z "$release_url" ]; then
             echo "GitHub Release '$TAG' does not exist." >&2
             exit 1
           fi
+          echo "release_url=$release_url"
           echo "release_url=$release_url" >> "$GITHUB_OUTPUT"
 
   build-artifacts:
@@ -273,6 +281,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: AgentKitProject/agentkitforge-app
           TAG: ${{ needs.prepare.outputs.tag }}
           REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
         run: |
@@ -282,6 +291,7 @@ jobs:
           }
 
           $args = @("release", "upload", $env:TAG) + $assetFiles
+          $args += @("--repo", $env:SOURCE_REPO)
 
           if ($env:REPLACE_EXISTING_ASSETS -eq "true") {
             $args += "--clobber"
@@ -305,10 +315,12 @@ jobs:
       - name: Upload release notes to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: AgentKitProject/agentkitforge-app
           TAG: ${{ needs.prepare.outputs.tag }}
           REPLACE_EXISTING_ASSETS: ${{ inputs.replace_existing_assets }}
         run: |
-          args=(release upload "$TAG" "RELEASE_NOTES.md")
+          SOURCE_REPO="${SOURCE_REPO:-AgentKitProject/agentkitforge-app}"
+          args=(release upload "$TAG" "RELEASE_NOTES.md" --repo "$SOURCE_REPO")
 
           if [ "$REPLACE_EXISTING_ASSETS" = "true" ]; then
             args+=(--clobber)
