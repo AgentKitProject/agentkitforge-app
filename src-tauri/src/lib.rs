@@ -1428,6 +1428,14 @@ fn save_app_preferences<R: Runtime>(
 }
 
 #[tauri::command]
+fn save_update_check_timestamp<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    checked_at: String,
+) -> Result<settings::PublicSettings, String> {
+    settings::save_update_check_timestamp(&app, checked_at)
+}
+
+#[tauri::command]
 fn save_ai_provider<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: ai_providers::AiProviderInput,
@@ -2534,6 +2542,8 @@ fn now_timestamp() -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             select_agent_kit_folder,
             select_onefile_output_path,
@@ -2563,6 +2573,7 @@ pub fn run() {
             clear_openai_api_key,
             save_default_model,
             save_app_preferences,
+            save_update_check_timestamp,
             save_ai_provider,
             remove_ai_provider,
             set_default_ai_provider,

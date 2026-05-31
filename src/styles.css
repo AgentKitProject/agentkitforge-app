@@ -1687,6 +1687,41 @@ textarea {
   font-size: 0.9rem;
 }
 
+.update-banner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  color: #12523a;
+  background: #edf8f2;
+  border: 1px solid #b9e5cd;
+  border-radius: var(--radius-panel);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.update-banner.failed {
+  color: #7a2323;
+  background: #fff1f1;
+  border-color: #f2c7c8;
+}
+
+.update-banner p {
+  margin: 4px 0 0;
+  color: inherit;
+}
+
+.update-actions {
+  justify-content: flex-end;
+}
+
+.compact-details {
+  margin-top: 8px;
+}
+
 .report-meta {
   display: grid;
   gap: 10px;
@@ -2326,6 +2361,10 @@ textarea:focus {
   .wizard-nav {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .update-banner {
+    grid-template-columns: 1fr;
   }
 
   .compact-button,

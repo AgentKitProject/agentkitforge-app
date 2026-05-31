@@ -22,6 +22,7 @@ struct StoredSettings {
     include_templates: Option<bool>,
     include_workflows: Option<bool>,
     include_references: Option<bool>,
+    last_update_check_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +54,7 @@ pub struct PublicSettings {
     pub include_templates: bool,
     pub include_workflows: bool,
     pub include_references: bool,
+    pub last_update_check_at: Option<String>,
     pub settings_path: String,
 }
 
@@ -98,6 +100,7 @@ pub fn get_public_settings<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Publ
         include_templates: settings.include_templates.unwrap_or(true),
         include_workflows: settings.include_workflows.unwrap_or(true),
         include_references: settings.include_references.unwrap_or(false),
+        last_update_check_at: settings.last_update_check_at,
         settings_path: path.to_string_lossy().into_owned(),
     })
 }
@@ -291,6 +294,21 @@ pub fn set_default_ai_provider<R: Runtime>(
     }
     settings.default_ai_provider_id = Some(provider_id);
     settings.ai_providers = Some(providers);
+    write_settings(app, &settings)?;
+    get_public_settings(app)
+}
+
+pub fn save_update_check_timestamp<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    checked_at: String,
+) -> Result<PublicSettings, String> {
+    let checked_at = checked_at.trim().to_string();
+    if checked_at.is_empty() {
+        return Err("Update check timestamp is required.".to_string());
+    }
+
+    let mut settings = read_settings_with_migration(app)?;
+    settings.last_update_check_at = Some(checked_at);
     write_settings(app, &settings)?;
     get_public_settings(app)
 }

@@ -14,7 +14,10 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { useEffect, useMemo, useState } from "react";
 import {
   aiProviderTypes,
@@ -40,6 +43,7 @@ type BuildModeGroup = "Create New" | "Edit Existing";
 type ImportTabId = "zip" | "folder" | "git" | "market" | "org";
 type InstallTargetTab = "codex" | "claude-code";
 type UsePromptMode = "prepared" | "custom";
+type UpdateStatus = "idle" | "up-to-date" | "checking" | "available" | "downloading" | "installing" | "failed";
 
 type AiProviderConfig = {
   id: string;
@@ -310,7 +314,18 @@ type PublicSettings = {
   includeTemplates: boolean;
   includeWorkflows: boolean;
   includeReferences: boolean;
+  lastUpdateCheckAt?: string;
   settingsPath: string;
+};
+
+type AppUpdateState = {
+  status: UpdateStatus;
+  update: Update | null;
+  lastCheckedAt?: string;
+  message?: string;
+  error?: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
 };
 
 type RunAgentKitResult = {
@@ -580,7 +595,8 @@ const knownDomains = [
 const starterPrompt =
   "Use the attached Agent Kit instructions to help with this task. Follow the kit's skill routing, guardrails, procedures, and output expectations. Ask clarifying questions if required inputs are missing.";
 const defaultRuntimeModel = getDefaultModelForProvider("openai") ?? "gpt-5.4-mini";
-const appVersion = "0.1.0";
+const appVersion = "0.2.1";
+const updateCheckIntervalMs = 24 * 60 * 60 * 1000;
 
 const navItems: NavItem[] = [
   { id: "my-kits", label: "My Kits", icon: PackageOpen },
@@ -600,6 +616,54 @@ function buildModeGroupForTab(tabId: BuildTabId): BuildModeGroup {
   return buildModes.find((mode) => mode.id === tabId)?.group ?? "Create New";
 }
 
+function formatByteCount(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function updateStatusLabel(status: UpdateStatus) {
+  switch (status) {
+    case "up-to-date":
+      return "Up to date";
+    case "checking":
+      return "Checking";
+    case "available":
+      return "Update available";
+    case "downloading":
+      return "Downloading";
+    case "installing":
+      return "Installing";
+    case "failed":
+      return "Update failed";
+    default:
+      return "Not checked yet";
+  }
+}
+
+function formatUpdateTimestamp(value?: string) {
+  if (!value) {
+    return "Not checked yet";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
+}
+
 export function App() {
   const [activeSection, setActiveSection] = useState<ExtendedSectionId>("my-kits");
   const [settings, setSettings] = useState<PublicSettings>({
@@ -615,7 +679,13 @@ export function App() {
     includeTemplates: true,
     includeWorkflows: true,
     includeReferences: false,
+    lastUpdateCheckAt: undefined,
     settingsPath: "",
+  });
+  const [runtimeAppVersion, setRuntimeAppVersion] = useState(appVersion);
+  const [updateState, setUpdateState] = useState<AppUpdateState>({
+    status: "idle",
+    update: null,
   });
   const [appState, setAppState] = useState<AppState>({
     currentKitPath: "",
@@ -651,14 +721,44 @@ export function App() {
           includeTemplates: true,
           includeWorkflows: true,
           includeReferences: false,
+          lastUpdateCheckAt: undefined,
           settingsPath: "",
         });
       });
   }, []);
 
   useEffect(() => {
+    getVersion()
+      .then(setRuntimeAppVersion)
+      .catch(() => setRuntimeAppVersion(appVersion));
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = settings.theme || "light";
   }, [settings.theme]);
+
+  useEffect(() => {
+    if (updateState.status !== "idle" || !settings.settingsPath) {
+      return;
+    }
+
+    const lastCheckedTime = settings.lastUpdateCheckAt
+      ? Date.parse(settings.lastUpdateCheckAt)
+      : 0;
+    if (lastCheckedTime && Date.now() - lastCheckedTime < updateCheckIntervalMs) {
+      setUpdateState((current) => ({
+        ...current,
+        lastCheckedAt: settings.lastUpdateCheckAt,
+      }));
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void checkForUpdates(false);
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [settings.lastUpdateCheckAt, settings.settingsPath, updateState.status]);
 
   useEffect(() => {
     const trimmedPath = appState.currentKitPath.trim();
@@ -687,6 +787,117 @@ export function App() {
 
   function updateAppState<Key extends keyof AppState>(key: Key, value: AppState[Key]) {
     setAppState((current) => ({ ...current, [key]: value }));
+  }
+
+  async function persistUpdateCheckTimestamp(checkedAt: string) {
+    try {
+      const updatedSettings = await invoke<PublicSettings>("save_update_check_timestamp", {
+        checkedAt,
+      });
+      setSettings(updatedSettings);
+    } catch {
+      setUpdateState((current) => ({ ...current, lastCheckedAt: checkedAt }));
+    }
+  }
+
+  async function checkForUpdates(manual: boolean) {
+    setUpdateState((current) => ({
+      ...current,
+      status: "checking",
+      error: undefined,
+      message: manual ? "Checking for updates..." : "Checking for updates in the background...",
+    }));
+
+    const checkedAt = new Date().toISOString();
+
+    try {
+      const update = await check();
+      await persistUpdateCheckTimestamp(checkedAt);
+
+      if (update) {
+        setUpdateState({
+          status: "available",
+          update,
+          lastCheckedAt: checkedAt,
+          message: `AgentKitForge ${update.version} is available.`,
+        });
+        return;
+      }
+
+      setUpdateState({
+        status: "up-to-date",
+        update: null,
+        lastCheckedAt: checkedAt,
+        message: "AgentKitForge is up to date.",
+      });
+    } catch (caughtError) {
+      await persistUpdateCheckTimestamp(checkedAt);
+      setUpdateState({
+        status: "failed",
+        update: null,
+        lastCheckedAt: checkedAt,
+        error: errorToMessage(caughtError),
+      });
+    }
+  }
+
+  async function installAvailableUpdate() {
+    const update = updateState.update;
+    if (!update) {
+      return;
+    }
+
+    setUpdateState((current) => ({
+      ...current,
+      status: "downloading",
+      error: undefined,
+      message: `Downloading AgentKitForge ${update.version}...`,
+      downloadedBytes: 0,
+      totalBytes: undefined,
+    }));
+
+    let downloadedBytes = 0;
+    let totalBytes: number | undefined;
+
+    try {
+      await update.download((event) => {
+        if (event.event === "Started") {
+          downloadedBytes = 0;
+          totalBytes = event.data.contentLength ?? undefined;
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+        }
+        setUpdateState((current) => ({
+          ...current,
+          downloadedBytes,
+          totalBytes,
+        }));
+      });
+
+      setUpdateState((current) => ({
+        ...current,
+        status: "installing",
+        message: "Installing update...",
+      }));
+
+      await update.install();
+      await relaunch();
+    } catch (caughtError) {
+      setUpdateState((current) => ({
+        ...current,
+        status: "failed",
+        error: errorToMessage(caughtError),
+      }));
+    }
+  }
+
+  function dismissUpdate() {
+    setUpdateState((current) => ({
+      ...current,
+      status: "idle",
+      message: undefined,
+      error: undefined,
+    }));
   }
 
   async function addKitToLibrary(path: string, source: KitLibrarySource) {
@@ -751,6 +962,13 @@ export function App() {
         </header>
 
         <section className="content">
+          <UpdateNotice
+            appVersion={runtimeAppVersion}
+            onCheck={() => checkForUpdates(true)}
+            onDismiss={dismissUpdate}
+            onInstall={installAvailableUpdate}
+            updateState={updateState}
+          />
           {activeSection === "my-kits" && (
             <MyKitsScreen
               onBuildWithAI={() => {
@@ -851,14 +1069,95 @@ export function App() {
           {activeSection === "settings" && (
             <SettingsScreen
               appState={appState}
+              appVersion={runtimeAppVersion}
               onSettingsChange={setSettings}
               onUpdate={updateAppState}
+              onCheckForUpdates={() => checkForUpdates(true)}
+              onInstallUpdate={installAvailableUpdate}
               settings={settings}
+              updateState={updateState}
             />
           )}
-          {activeSection === "about" && <AboutScreen settings={settings} />}
+          {activeSection === "about" && <AboutScreen appVersion={runtimeAppVersion} settings={settings} />}
         </section>
       </main>
+    </div>
+  );
+}
+
+function UpdateNotice({
+  appVersion,
+  onCheck,
+  onDismiss,
+  onInstall,
+  updateState,
+}: {
+  appVersion: string;
+  onCheck: () => void;
+  onDismiss: () => void;
+  onInstall: () => void;
+  updateState: AppUpdateState;
+}) {
+  const isBusy = updateState.status === "checking" || updateState.status === "downloading" || updateState.status === "installing";
+  const isVisible =
+    updateState.status === "available" ||
+    updateState.status === "downloading" ||
+    updateState.status === "installing" ||
+    updateState.status === "failed";
+
+  if (!isVisible) {
+    return null;
+  }
+
+  const progress =
+    updateState.status === "downloading" && updateState.downloadedBytes
+      ? updateState.totalBytes
+        ? `${formatByteCount(updateState.downloadedBytes)} of ${formatByteCount(updateState.totalBytes)}`
+        : formatByteCount(updateState.downloadedBytes)
+      : null;
+
+  return (
+    <div className={`update-banner ${updateState.status === "failed" ? "failed" : ""}`} role="status">
+      <div>
+        <strong>
+          {updateState.status === "available"
+            ? `AgentKitForge ${updateState.update?.version} is available`
+            : updateState.status === "failed"
+              ? "Update check failed"
+              : updateState.message || "Updating AgentKitForge"}
+        </strong>
+        <p>
+          {updateState.status === "available"
+            ? `You are running ${appVersion}. Install when you are ready.`
+            : updateState.status === "failed"
+              ? updateState.error || "AgentKitForge could not check for updates."
+              : progress || updateState.message}
+        </p>
+        {updateState.update?.body && updateState.status === "available" && (
+          <details className="advanced-details compact-details">
+            <summary>Release notes</summary>
+            <div className="markdown-preview">{updateState.update.body}</div>
+          </details>
+        )}
+      </div>
+      <div className="button-row update-actions">
+        {updateState.status === "available" && (
+          <button className="primary-button" onClick={onInstall} type="button">
+            Update now
+          </button>
+        )}
+        {updateState.status === "failed" && (
+          <button className="secondary-button" disabled={isBusy} onClick={onCheck} type="button">
+            Try again
+          </button>
+        )}
+        {isBusy && <LoadingStatus text={updateState.message || "Updating..."} />}
+        {!isBusy && (
+          <button className="secondary-button" onClick={onDismiss} type="button">
+            Later
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -8207,14 +8506,22 @@ function defaultModelForProvider(providerType: AiProviderType) {
 
 function SettingsScreen({
   appState,
+  appVersion,
+  onCheckForUpdates,
+  onInstallUpdate,
   onSettingsChange,
   onUpdate,
   settings,
+  updateState,
 }: {
   appState: AppState;
+  appVersion: string;
+  onCheckForUpdates: () => void;
+  onInstallUpdate: () => void;
   onSettingsChange: (settings: PublicSettings) => void;
   onUpdate: <Key extends keyof AppState>(key: Key, value: AppState[Key]) => void;
   settings: PublicSettings;
+  updateState: AppUpdateState;
 }) {
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
@@ -8744,6 +9051,63 @@ function SettingsScreen({
       </section>
 
       <section className="form-panel settings-panel">
+      <h2>Updates</h2>
+      <p className="form-copy">
+        AgentKitForge checks agentkitforge.com for signed desktop updates. Updates are never installed until you choose Update now.
+      </p>
+      <dl className="report-meta">
+        <div>
+          <dt>Current version</dt>
+          <dd>{appVersion}</dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>{updateStatusLabel(updateState.status)}</dd>
+        </div>
+        <div>
+          <dt>Last checked</dt>
+          <dd>{formatUpdateTimestamp(updateState.lastCheckedAt || settings.lastUpdateCheckAt)}</dd>
+        </div>
+        {updateState.update && (
+          <div>
+            <dt>Available version</dt>
+            <dd>{updateState.update.version}</dd>
+          </div>
+        )}
+      </dl>
+      {updateState.message && <div className="copy-state">{updateState.message}</div>}
+      {updateState.error && (
+        <div className="error-state" role="alert">
+          {updateState.error}
+        </div>
+      )}
+      <div className="button-row">
+        <button
+          className="secondary-button"
+          disabled={updateState.status === "checking" || updateState.status === "downloading" || updateState.status === "installing"}
+          onClick={onCheckForUpdates}
+          type="button"
+        >
+          {updateState.status === "checking" && <InlineSpinner className="button-spinner" />}
+          {updateState.status === "checking" ? "Checking" : "Check for updates"}
+        </button>
+        {updateState.update && (
+          <button
+            className="primary-button"
+            disabled={updateState.status === "downloading" || updateState.status === "installing"}
+            onClick={onInstallUpdate}
+            type="button"
+          >
+            {(updateState.status === "downloading" || updateState.status === "installing") && (
+              <InlineSpinner className="button-spinner" />
+            )}
+            {updateState.status === "installing" ? "Installing" : updateState.status === "downloading" ? "Downloading" : "Update now"}
+          </button>
+        )}
+      </div>
+      </section>
+
+      <section className="form-panel settings-panel">
       <h2>Security & Privacy</h2>
       <p className="form-copy">
         AgentKitForge stores provider settings and My Kits locally on this machine. It does not require an account or sync your local library.
@@ -8772,7 +9136,7 @@ function SettingsScreen({
   );
 }
 
-function AboutScreen({ settings }: { settings: PublicSettings }) {
+function AboutScreen({ appVersion, settings }: { appVersion: string; settings: PublicSettings }) {
   return (
     <div className="about-screen">
       <section className="form-panel about-panel">

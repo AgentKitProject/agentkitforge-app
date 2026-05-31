@@ -300,6 +300,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate Tauri updater signing secrets
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is required to create signed Tauri updater artifacts."
+          }
+
       - name: Build backend runtime
         run: npm run build:backend
 
@@ -315,7 +324,10 @@ jobs:
 
       - name: Build Tauri app
         if: ${{ matrix.platform != 'macos' }}
-        run: npm run build:tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run build:tauri -- --config src-tauri/tauri.updater.conf.json
 
       - name: Build signed and notarized Tauri app
         if: ${{ matrix.platform == 'macos' }}
@@ -323,7 +335,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
-        run: npm run build:tauri -- --bundles dmg
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run build:tauri -- --config src-tauri/tauri.updater.conf.json --bundles dmg
 
       - name: Verify bundled backend runtime
         run: npm run check:backend
@@ -414,6 +428,18 @@ jobs:
           Copy-Item -LiteralPath $setupSource.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-setup.exe") -Force
           Copy-Item -LiteralPath $msiSource.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-x64.msi") -Force
 
+          $setupSig = "$($setupSource.FullName).sig"
+          $msiSig = "$($msiSource.FullName).sig"
+          if (-not (Test-Path -LiteralPath $setupSig)) {
+            throw "No signed updater signature found for NSIS setup executable."
+          }
+          if (-not (Test-Path -LiteralPath $msiSig)) {
+            throw "No signed updater signature found for MSI installer."
+          }
+
+          Copy-Item -LiteralPath $setupSig -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-setup.exe.sig") -Force
+          Copy-Item -LiteralPath $msiSig -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-x64.msi.sig") -Force
+
       - name: Collect macOS artifacts
         if: ${{ matrix.platform == 'macos' }}
         shell: pwsh
@@ -433,6 +459,18 @@ jobs:
             Copy-Item -LiteralPath $dmg.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-macos-$arch.dmg") -Force
           }
 
+          $updateArchive = Get-ChildItem "src-tauri/target/release/bundle/macos" -Filter "*.app.tar.gz" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $updateArchive) {
+            throw "No macOS updater archive found."
+          }
+          $updateSignature = "$($updateArchive.FullName).sig"
+          if (-not (Test-Path -LiteralPath $updateSignature)) {
+            throw "No signed macOS updater signature found."
+          }
+
+          Copy-Item -LiteralPath $updateArchive.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-macos-$arch.app.tar.gz") -Force
+          Copy-Item -LiteralPath $updateSignature -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-macos-$arch.app.tar.gz.sig") -Force
+
           if (-not (Get-ChildItem $assetDir -File)) {
             throw "No signed/notarized macOS DMG artifact found."
           }
@@ -449,6 +487,11 @@ jobs:
           $appImage = Get-ChildItem "src-tauri/target/release/bundle/appimage" -Filter "*.AppImage" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($appImage) {
             Copy-Item -LiteralPath $appImage.FullName -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-linux-x86_64.AppImage") -Force
+            $appImageSig = "$($appImage.FullName).sig"
+            if (-not (Test-Path -LiteralPath $appImageSig)) {
+              throw "No signed Linux AppImage updater signature found."
+            }
+            Copy-Item -LiteralPath $appImageSig -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-linux-x86_64.AppImage.sig") -Force
           }
 
           $deb = Get-ChildItem "src-tauri/target/release/bundle/deb" -Filter "*.deb" -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -483,6 +526,7 @@ jobs:
       - name: Create artifact manifest
         shell: pwsh
         env:
+          VERSION: ${{ needs.prepare.outputs.version }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           $assetDir = Join-Path $PWD "release-assets"
@@ -499,9 +543,38 @@ jobs:
             throw "No checksum file was generated for $env:PLATFORM."
           }
 
+          $updatePlatforms = @()
+          if ($env:PLATFORM -eq "windows") {
+            $urlAsset = "AgentKitForge-$env:VERSION-setup.exe"
+            $signatureAsset = "$urlAsset.sig"
+            if (($files -notcontains $urlAsset) -or ($files -notcontains $signatureAsset)) {
+              throw "Windows updater metadata requires $urlAsset and $signatureAsset."
+            }
+            $updatePlatforms += @{ key = "windows-x86_64"; urlAsset = $urlAsset; signatureAsset = $signatureAsset }
+          } elseif ($env:PLATFORM -eq "macos") {
+            $archive = $files | Where-Object { $_ -like "AgentKitForge-*-macos-*.app.tar.gz" } | Select-Object -First 1
+            if (-not $archive) {
+              throw "macOS updater metadata requires a .app.tar.gz archive."
+            }
+            $signatureAsset = "$archive.sig"
+            if ($files -notcontains $signatureAsset) {
+              throw "macOS updater metadata requires $signatureAsset."
+            }
+            $platformKey = if ($archive -like "*-macos-arm64.app.tar.gz") { "darwin-aarch64" } else { "darwin-x86_64" }
+            $updatePlatforms += @{ key = $platformKey; urlAsset = $archive; signatureAsset = $signatureAsset }
+          } elseif ($env:PLATFORM -eq "linux") {
+            $urlAsset = "AgentKitForge-$env:VERSION-linux-x86_64.AppImage"
+            $signatureAsset = "$urlAsset.sig"
+            if (($files -notcontains $urlAsset) -or ($files -notcontains $signatureAsset)) {
+              throw "Linux updater metadata requires $urlAsset and $signatureAsset."
+            }
+            $updatePlatforms += @{ key = "linux-x86_64"; urlAsset = $urlAsset; signatureAsset = $signatureAsset }
+          }
+
           @{
             platform = $env:PLATFORM
             artifacts = @($files)
+            updatePlatforms = @($updatePlatforms)
           } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $manifestDir "$env:PLATFORM.json") -Encoding utf8
 
       - name: Upload artifacts to GitHub Release
@@ -575,6 +648,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_REPO: AgentKitProject/agentkitforge-app
           TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           REQUIRED_PLATFORMS: ${{ needs.prepare.outputs.platforms }}
         run: |
           set -euo pipefail
@@ -589,6 +663,7 @@ jobs:
           release_assets_json="$(gh release view "$TAG" --repo "$SOURCE_REPO" --json assets)"
           artifact_names_json="$(jq -s '[.[].artifacts[]] | unique' "${manifest_files[@]}")"
           platforms_json="$(jq -s '[.[].platform] | unique' "${manifest_files[@]}")"
+          update_platforms_json="$(jq -s '[.[].updatePlatforms[]?] | unique_by(.key)' "${manifest_files[@]}")"
 
           IFS=',' read -ra required_platforms <<< "$REQUIRED_PLATFORMS"
           for platform in "${required_platforms[@]}"; do
@@ -609,6 +684,51 @@ jobs:
               exit 1
             fi
           done < <(jq -r '.[]' <<< "$artifact_names_json")
+
+          if [ "$(jq 'length' <<< "$update_platforms_json")" -eq 0 ]; then
+            echo "No updater metadata entries were produced; refusing to mirror website downloads." >&2
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r platform_key url_asset signature_asset; do
+            if [ -z "$platform_key" ] || [ -z "$url_asset" ] || [ -z "$signature_asset" ]; then
+              echo "Updater metadata contains an incomplete platform entry." >&2
+              exit 1
+            fi
+            for artifact in "$url_asset" "$signature_asset"; do
+              if ! jq -e --arg name "$artifact" 'index($name)' <<< "$artifact_names_json" >/dev/null; then
+                echo "Updater metadata for '$platform_key' references '$artifact', but the artifact manifest does not include it." >&2
+                exit 1
+              fi
+              if ! jq -e --arg name "$artifact" '.assets | any(.name == $name)' <<< "$release_assets_json" >/dev/null; then
+                echo "Updater metadata for '$platform_key' references '$artifact', but the GitHub Release does not include it." >&2
+                exit 1
+              fi
+            done
+          done < <(jq -r '.[] | [.key, .urlAsset, .signatureAsset] | @tsv' <<< "$update_platforms_json")
+
+          release_notes="$(cat RELEASE_NOTES.md 2>/dev/null || true)"
+          pub_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          metadata_file="AgentKitForge-${VERSION}-update-metadata.json"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg notes "$release_notes" \
+            --arg pub_date "$pub_date" \
+            --argjson update_platforms "$update_platforms_json" \
+            '{
+              version: $version,
+              tag: $tag,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: ($update_platforms | reduce .[] as $platform ({}; .[$platform.key] = {
+                urlAsset: $platform.urlAsset,
+                signatureAsset: $platform.signatureAsset
+              }))
+            }' > "$metadata_file"
+
+          gh release upload "$TAG" "$metadata_file" --repo "$SOURCE_REPO" --clobber
+          artifact_names_json="$(jq --arg metadata "$metadata_file" '. + [$metadata] | unique' <<< "$artifact_names_json")"
 
           echo "Verified uploaded release artifacts:"
           jq -r '.[]' <<< "$artifact_names_json"

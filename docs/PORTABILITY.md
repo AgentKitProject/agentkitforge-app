@@ -51,7 +51,7 @@ Required GitHub secrets:
 - `APPLE_API_ISSUER_ID`
 - `APPLE_API_KEY`
 
-Local development builds may still be unsigned. macOS signing is separate from Windows signing and from any future Tauri updater signing.
+Local development builds may still be unsigned. macOS signing is separate from Windows signing and Tauri updater signing.
 
 ## Runtime Resolution
 
