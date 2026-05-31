@@ -62,8 +62,14 @@ jobs:
         run: npm run check
 
       - name: Build Tauri app
+        if: ${{ runner.os != 'macOS' }}
         working-directory: agentkitforge-app
         run: npm run build:tauri
+
+      - name: Build Tauri app bundle
+        if: ${{ runner.os == 'macOS' }}
+        working-directory: agentkitforge-app
+        run: npm run build:tauri -- --bundles app
 
       - name: Verify packaged runtime resources
         working-directory: agentkitforge-app

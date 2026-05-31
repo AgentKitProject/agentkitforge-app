@@ -87,3 +87,5 @@ Each matrix job runs:
 Linux jobs install the WebKitGTK/AppIndicator packages required for Tauri builds.
 
 These jobs verify `backend-dist` exists before Tauri packaging and verify the Tauri build output references the backend runtime resources and platform sidecar where practical. They do not publish macOS or Linux artifacts.
+
+The macOS smoke job builds the `.app` bundle only. DMG creation, signing, and notarization are intentionally excluded until macOS becomes a public release target.
