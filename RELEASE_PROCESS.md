@@ -69,7 +69,7 @@ The desktop app consumes `@agentkitforge/core` from npm using semver.
 Current app dependency format:
 
 ```json
-"@agentkitforge/core": "^0.1.1"
+"@agentkitforge/core": "^0.2.0"
 ```
 
 Core package publishing is handled separately from the app release process.
@@ -90,7 +90,7 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 
 1. Release Please publishes the GitHub Release and tag.
 2. The `release-please.yml` workflow runs a dependent `build-release-artifacts` job when a release was created.
-3. The job builds Windows installers on `windows-latest`.
+3. The job builds Windows installers on `windows-latest`. The build bundles backend bridge JavaScript, `@agentkitforge/core`, JavaScript dependencies, and a Node sidecar before Tauri packaging.
 4. The job uploads these assets to the GitHub Release:
    - `AgentKitForge-${version}-setup.exe`
    - `AgentKitForge-${version}-x64.msi`
@@ -109,7 +109,7 @@ Do not point the website at artifacts until they exist and the infra mirror has 
 
 ## Current Release Caveats
 
-- Code signing is not configured yet.
+- Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions before checksums are generated. Local development builds are unsigned.
 - Auto-update is not configured yet.
-- macOS and Linux release packaging are future work unless built manually in those environments.
+- macOS and Linux release packaging are future work unless built manually in those environments. The backend runtime architecture is prepared for platform sidecars, but public packaging/signing/notarization is not configured yet.
 - AgentKitForge infrastructure and marketplace/backend release work lives outside this public app repository.

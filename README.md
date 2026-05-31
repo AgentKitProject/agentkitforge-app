@@ -30,7 +30,7 @@ npm install
 The app consumes the released core package from npm using semver:
 
 ```json
-"@agentkitforge/core": "^0.1.1"
+"@agentkitforge/core": "^0.2.0"
 ```
 
 For core development, a sibling checkout is still useful:
@@ -51,7 +51,9 @@ cd ../agentkitforge-app
 npm install
 ```
 
-During development, backend bridge scripts can use a sibling `agentkitforge-core` checkout when it exists. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged production builds do not honor these development override variables.
+During development, backend bridge scripts can use a sibling `agentkitforge-core` checkout when it exists. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged bridge assets do not honor these development override variables.
+
+Packaged builds run `npm run build:backend` before Tauri packaging. This bundles the backend bridge scripts, `@agentkitforge/core`, and required JavaScript dependencies into `src-tauri/backend-dist/`, then prepares a platform-specific Node sidecar under `src-tauri/binaries/`. The installed app does not require user-installed Node and does not require a runtime `node_modules` folder. See `docs/PORTABILITY.md` for macOS/Linux packaging notes.
 
 Run the desktop app in development mode:
 
@@ -71,6 +73,7 @@ Run the lightweight local smoke suite:
 ```sh
 npm run check
 npm run build
+npm run check:backend
 ```
 
 This runs the TypeScript/Rust check and the frontend production build. It does not create desktop installer artifacts.
@@ -79,6 +82,7 @@ Create a packaged Tauri desktop build:
 
 ```sh
 npm run build:tauri
+npm run check:backend
 ```
 
 ## Release Build
@@ -97,7 +101,7 @@ src-tauri/target/release/bundle/msi/
 src-tauri/target/release/bundle/nsis/
 ```
 
-The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` installer. Code signing is not configured yet, so Windows may show unsigned-app warnings. macOS and Linux packages are future work unless built manually on those platforms.
+The expected Windows outputs are an `.msi` installer and an NSIS `-setup.exe` installer. Public release artifacts are signed in GitHub Actions with Microsoft Artifact Signing / Trusted Signing before checksums are generated. Local development builds are unsigned and may still show Windows warnings. macOS and Linux packages are future work unless built manually on those platforms.
 
 The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` into `src-tauri/icons/`. The Windows bundle points at `src-tauri/icons/icon.ico`.
 
@@ -105,20 +109,20 @@ The app icon set is generated from `src/assets/brand/agentkitforge-icon.svg` int
 
 The GitHub Actions smoke workflow runs on pull requests, pushes to `main`, and manual dispatch.
 
-It uses Node 26 on `windows-latest`, installs the app with `npm ci`, and resolves `@agentkitforge/core` from npm through `package-lock.json`. It then runs:
+It uses Node 26 on `windows-latest`, `ubuntu-latest`, and `macos-latest`, installs the app with `npm ci`, and resolves `@agentkitforge/core` from npm through `package-lock.json`. It then runs:
 
 ```sh
 npm run check
 npm run build
 ```
 
-The workflow also has a separate `tauri-build-smoke` job that runs:
+The workflow also has a separate matrix `tauri-build-smoke` job that runs:
 
 ```sh
 npm run build:tauri
 ```
 
-The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend build path. The workflow does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
+The Tauri build smoke is separated because desktop packaging is slower and more runner-specific than the check/frontend/backend build path. Linux jobs install the WebKitGTK/AppIndicator packages Tauri needs. The workflow does not publish macOS or Linux artifacts and does not add a large UI or command test harness yet; it runs the current lightweight build coverage available in the repo.
 
 The smoke workflow does not build `agentkitforge-core`; it consumes the published `@agentkitforge/core` package from npm.
 
@@ -176,7 +180,7 @@ Edit Existing modes:
 
 AgentKitForge remembers the last Build/Edit mode you used in local browser storage. If no mode has been used yet, Build opens on **Create New -> Build with AI**.
 
-New kits default to the app-managed library folder, normally `Documents/AgentKitForge/Kits` on Windows. You can change the save location in Settings or per workflow.
+New kits default to the app-managed library folder, normally under your Documents folder at `AgentKitForge/Kits`. You can change the save location in Settings or per workflow.
 
 ## Guided Builder
 
@@ -223,7 +227,7 @@ Open the Build section, choose **From Template**, and fill in:
 - Kit description
 - Template: `blank` or `financial-review`
 
-The app creates the kit in a child folder named after the kit id. For example, output folder `C:\kits` and kit id `customer-support` creates `C:\kits\customer-support`.
+The app creates the kit in a child folder named after the kit id. For example, output folder `Documents/AgentKitForge/Kits` and kit id `customer-support` creates `Documents/AgentKitForge/Kits/customer-support`.
 
 Use force overwrite only when you want template files to be written into an existing non-empty kit folder. Existing unrelated files are left in place by `agentkitforge-core`.
 
@@ -360,7 +364,7 @@ Normal views show friendly file names and locations first. Full filesystem paths
 
 Open **Package / Export** when a kit is ready to distribute or hand off.
 
-Choose a kit from **My Kits** first. Use **Add existing kit...** only when the kit is not in your library yet. The selected kit is shown with name, version, description, and friendly location. Exports default to the app-managed exports folder, normally `Documents/AgentKitForge/Exports`; the screen shows this as **AgentKitForge Exports** and keeps the full path under **Show full path**.
+Choose a kit from **My Kits** first. Use **Add existing kit...** only when the kit is not in your library yet. The selected kit is shown with name, version, description, and friendly location. Exports default to the app-managed exports folder, normally under your Documents folder at `AgentKitForge/Exports`; the screen shows this as **AgentKitForge Exports** and keeps the full path under **Show full path**.
 
 Artifact types:
 
@@ -565,9 +569,9 @@ If Git import fails, check that Git is installed, confirm the same URL clones fr
 
 AgentKitForge uses friendly labels in normal screens and keeps full paths under Advanced details:
 
-- **AgentKitForge Library**: normally `Documents/AgentKitForge/Kits`
-- **AgentKitForge Exports**: normally `Documents/AgentKitForge/Exports`
-- **AgentKitForge Drafts**: normally `Documents/AgentKitForge/Drafts`
+- **AgentKitForge Library**: normally under your Documents folder at `AgentKitForge/Kits`
+- **AgentKitForge Exports**: normally under your Documents folder at `AgentKitForge/Exports`
+- **AgentKitForge Drafts**: normally under your Documents folder at `AgentKitForge/Drafts`
 
 If the configured app folder is OS-specific or changed in Settings, AgentKitForge still shows friendly labels first and exposes the exact folder path through **Show full path**, **Copy path**, or **Open folder** actions.
 

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev:frontend",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build:frontend",
+    "beforeBuildCommand": "npm run build:backend && npm run build:frontend",
     "frontendDist": "../dist"
   },
   "app": {
@@ -31,22 +31,31 @@
     "longDescription": "AgentKitForge is a desktop app for building, validating, packaging, installing, and using portable Agent Kits.",
     "copyright": "Copyright (c) AgentKitForge",
     "icon": [
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.icns",
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ],
+    "externalBin": [
+      "binaries/node"
     ],
     "resources": [
-      "backend/validate-agent-kit.mjs",
-      "backend/security-utils.mjs",
-      "backend/create-agent-kit.mjs",
-      "backend/export-agent-kit-onefile.mjs",
-      "backend/render-agent-kit-draft.mjs",
-      "backend/generate-agent-kit-draft.mjs",
-      "backend/render-generated-agent-kit-draft.mjs",
-      "backend/package-agent-kit.mjs",
-      "backend/build-agent-kit-context.mjs",
-      "backend/prepared-prompts.mjs",
-      "backend/agent-kit-app-support.mjs",
-      "backend/export-agent-kit-codex.mjs",
-      "backend/export-agent-kit-claude-code.mjs"
+      "backend-dist/validate-agent-kit.mjs",
+      "backend-dist/security-utils.mjs",
+      "backend-dist/create-agent-kit.mjs",
+      "backend-dist/export-agent-kit-onefile.mjs",
+      "backend-dist/render-agent-kit-draft.mjs",
+      "backend-dist/generate-agent-kit-draft.mjs",
+      "backend-dist/render-generated-agent-kit-draft.mjs",
+      "backend-dist/package-agent-kit.mjs",
+      "backend-dist/build-agent-kit-context.mjs",
+      "backend-dist/prepared-prompts.mjs",
+      "backend-dist/agent-kit-app-support.mjs",
+      "backend-dist/export-agent-kit-codex.mjs",
+      "backend-dist/export-agent-kit-claude-code.mjs",
+      "backend-dist/chunks"
     ]
   }
 }
