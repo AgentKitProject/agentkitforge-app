@@ -72,7 +72,9 @@ Version rules:
 - `fix:` and `fix(security):` create a patch release.
 - Breaking changes before `1.0.0` are treated as minor releases and must be documented.
 
-When Release Please creates a GitHub Release, the same `release-please.yml` workflow builds and uploads the Windows installer artifacts. This avoids relying on a separate `release: published` workflow trigger, which GitHub can suppress when the release is created with `GITHUB_TOKEN`.
+When Release Please creates a GitHub Release, the same `release-please.yml` workflow builds and uploads release artifacts. This avoids relying on a separate `release: published` workflow trigger, which GitHub can suppress when the release is created with `GITHUB_TOKEN`.
+
+The GitHub Release may exist before all installer artifacts are ready. That is acceptable. The website mirror is gated on the artifact jobs, checksums, signing/notarization checks, upload completion, and a final release-asset verification step.
 
 ## Core Dependency
 
@@ -102,14 +104,22 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
 
 1. Release Please publishes the GitHub Release and tag.
 2. The `release-please.yml` workflow runs a dependent `build-release-artifacts` job when a release was created.
-3. The automatic job builds Windows installers on `windows-latest`. Windows is currently the main supported public release platform.
+3. The automatic job builds Windows installers on `windows-latest` and signed/notarized macOS DMG artifacts on `macos-latest`.
 4. The job uploads these assets to the GitHub Release:
    - `AgentKitForge-${version}-setup.exe`
    - `AgentKitForge-${version}-x64.msi`
-   - `AgentKitForge-${version}-checksums.txt`
+   - `AgentKitForge-${version}-windows-checksums.txt`
+   - `AgentKitForge-${version}-macos-${arch}.dmg`
+   - `AgentKitForge-${version}-macos-checksums.txt`
    - `RELEASE_NOTES.md`
-5. After artifact upload, the job dispatches the private infra repo with event type `app-release-published`.
-6. The private infra repo mirrors the artifacts to `agentkitforge.com`.
+5. Each platform job writes an artifact manifest listing the files it uploaded.
+6. A final pre-dispatch verification job confirms that:
+   - each required/selected platform produced a manifest
+   - every selected platform has a checksum file
+   - every manifest-listed artifact exists on the GitHub Release
+   - macOS artifacts were signed, notarized, stapled, and Gatekeeper-verified before upload
+7. Only after verification passes, the job dispatches the private infra repo with event type `app-release-published`.
+8. The private infra repo mirrors the artifacts to `agentkitforge.com`.
 
 The app repo does not store AWS credentials and does not upload directly to S3. Website/S3 mirroring is owned by the private `AgentKitProject/agentkitforge-infra` repository.
 
@@ -122,16 +132,20 @@ Set `AGENTKIT_INFRA_DISPATCH_TOKEN` in this public app repository with the minim
 - `linux`
 - `all`
 
-Manual fallback runs verify the release exists, build/upload selected platform artifacts, generate per-platform SHA-256 checksum files, and dispatch the infra mirror workflow when `AGENTKIT_INFRA_DISPATCH_TOKEN` is available. The dispatch payload includes the selected platform list.
+Manual fallback runs verify the release exists, build/upload selected platform artifacts, generate per-platform SHA-256 checksum files, verify uploaded assets, and dispatch the infra mirror workflow when `AGENTKIT_INFRA_DISPATCH_TOKEN` is available. The dispatch payload includes the selected platform list and artifact names.
 
-Do not point the website at artifacts until they exist and the infra mirror has completed.
+Do not point the website at artifacts until they exist and the infra mirror has completed. If any artifact build, signing/notarization step, checksum generation, upload, or pre-dispatch verification fails, the app workflow does not dispatch the private infra mirror and the public website should remain on the previous valid release.
 
 ## Current Release Caveats
 
 - Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions before checksums are generated. Local development builds are unsigned.
+- macOS public release artifacts are signed with Apple Developer ID, notarized with App Store Connect API key credentials, stapled, and verified before upload.
+- macOS downloads are mirrored to the website only after Developer ID signing and notarization pass.
+- macOS signing is separate from Windows signing and separate from any future Tauri updater signing.
+- Downloaded macOS artifacts should no longer show the "damaged and can't be opened" Gatekeeper error once notarization succeeds and the ticket is stapled.
 - Auto-update is not configured yet.
-- macOS and Linux artifacts can be built by the manual fallback workflow once platform publishing is enabled, but they are not public download targets yet.
-- macOS signing and notarization are not configured yet. Any macOS artifacts produced before that work are unsigned and should be treated as preview/validation artifacts.
+- Local macOS development builds may still be unsigned and can be blocked or warned by Gatekeeper.
+- Linux artifacts can be built by the manual fallback workflow once platform publishing is enabled, but they are not public download targets yet.
 - Linux artifacts are unsigned except for SHA-256 checksums unless a separate signing process is configured.
-- Do not list macOS or Linux on the website Download page until the product decision says those platforms are public release targets.
+- Do not list Linux on the website Download page until the product decision says it is a public release target.
 - AgentKitForge infrastructure and marketplace/backend release work lives outside this public app repository.

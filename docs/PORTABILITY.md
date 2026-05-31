@@ -5,7 +5,7 @@ AgentKitForge is preparing for macOS and Linux support.
 Current support status:
 
 - Windows: supported release target.
-- macOS: build smoke validation is in progress; not a public release target yet.
+- macOS: release artifact automation signs and notarizes public DMG artifacts; runtime validation remains required before broad promotion.
 - Linux: build smoke validation is in progress; not a public release target yet.
 
 ## Backend Bridge Runtime
@@ -33,7 +33,25 @@ Platform sidecar names follow Tauri target triples:
 - `src-tauri/binaries/node-x86_64-unknown-linux-gnu`
 - `src-tauri/binaries/node-aarch64-unknown-linux-gnu`
 
-`npm run build:backend` creates the sidecar for the OS and architecture running the build. Public macOS/Linux release publishing still needs platform packaging, signing, and notarization work.
+`npm run build:backend` creates the sidecar for the OS and architecture running the build.
+
+## macOS Signing and Notarization
+
+Public macOS release artifacts require Apple Developer ID signing and notarization. Release workflows import the Developer ID certificate into a temporary keychain, build with Tauri signing/notarization environment variables, staple the notarization ticket, and verify with `codesign`, `xcrun stapler`, and `spctl` before upload.
+
+The website mirror is dispatched only after the signed/notarized macOS artifact is uploaded to the GitHub Release and verified in the release-asset manifest. If macOS signing, notarization, stapling, or verification fails, the website remains on the previous valid release.
+
+Required GitHub secrets:
+
+- `APPLE_CERTIFICATE_BASE64`
+- `APPLE_CERTIFICATE_PASSWORD`
+- `APPLE_SIGNING_IDENTITY`
+- `APPLE_TEAM_ID`
+- `APPLE_API_KEY_ID`
+- `APPLE_API_ISSUER_ID`
+- `APPLE_API_KEY`
+
+Local development builds may still be unsigned. macOS signing is separate from Windows signing and from any future Tauri updater signing.
 
 ## Runtime Resolution
 
@@ -88,4 +106,4 @@ Linux jobs install the WebKitGTK/AppIndicator packages required for Tauri builds
 
 These jobs verify `backend-dist` exists before Tauri packaging and verify the Tauri build output references the backend runtime resources and platform sidecar where practical. They do not publish macOS or Linux artifacts.
 
-The macOS smoke job builds the `.app` bundle only. DMG creation, signing, and notarization are intentionally excluded until macOS becomes a public release target.
+The macOS smoke job builds the `.app` bundle only. Release artifact workflows are responsible for Developer ID signing, DMG creation, notarization, stapling, and release upload.

@@ -14,7 +14,7 @@ Use this checklist when validating AgentKitForge runtime behavior on each deskto
 | Platform | Status | Notes |
 | --- | --- | --- |
 | Windows | Supported | Primary v0.1 release target. Windows installers are built in release automation. |
-| macOS | Build-only | Build smoke validation is in progress. Public signing/notarization and release packaging are not configured yet. |
+| macOS | Preview | Public release DMG artifacts are Developer ID signed, notarized, stapled, and verified in release automation. Runtime validation remains required before marking fully supported. |
 | Linux | Build-only | Build smoke validation is in progress. Public distro packaging and dependency guidance are not finalized yet. |
 
 ## Runtime Checklist
@@ -41,6 +41,9 @@ Run the full checklist on each platform before changing its status.
 ### macOS
 
 - [ ] Build the app on `macos-latest` or a local macOS machine.
+- [ ] For release artifacts, verify the DMG was Developer ID signed, notarized, and stapled.
+- [ ] Confirm website mirroring occurred only after the signed/notarized DMG and checksum were uploaded and verified.
+- [ ] Open the downloaded DMG and confirm macOS does not show "AgentKitForge is damaged and can't be opened."
 - [ ] Open the built app.
 - [ ] Open Settings and verify provider, folder, appearance, privacy, and About sections.
 - [ ] Open My Kits and verify existing kits display correctly.
@@ -76,6 +79,6 @@ Run the full checklist on each platform before changing its status.
 
 - Git must be installed and available on `PATH` for Git repository imports.
 - Private Git imports use the user's local Git credentials; AgentKitForge does not store Git provider tokens.
-- macOS signing and notarization are not configured yet, so local builds may be blocked or warned by Gatekeeper.
+- macOS public release artifacts require Developer ID signing and notarization. Local development builds may still be unsigned and can be blocked or warned by Gatekeeper.
 - Linux package dependencies vary by distro. CI installs the Ubuntu WebKitGTK/AppIndicator packages needed for Tauri build smoke validation, but public Linux package support is not finalized.
 - Local agent destination folders differ by operating system and user tool configuration.
