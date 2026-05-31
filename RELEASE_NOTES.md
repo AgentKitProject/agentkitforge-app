@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.2.1](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.2.0...v0.2.1) (2026-05-31)
+
+
+### Bug Fixes
+
+* adding signing/notarizing for macos release artifacts, improving workflow to ensure macos artifacts are signed/notaritzed ([492bea5](https://github.com/AgentKitProject/agentkitforge-app/commit/492bea5f3b1e47eec2fef9e2377b4af859439be3))
+
 ## [0.2.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.1.1...v0.2.0) (2026-05-31)
 
 
