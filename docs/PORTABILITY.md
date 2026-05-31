@@ -1,6 +1,12 @@
 # Portability Notes
 
-AgentKitForge is preparing for macOS and Linux support. Windows remains the current release target.
+AgentKitForge is preparing for macOS and Linux support.
+
+Current support status:
+
+- Windows: supported release target.
+- macOS: build smoke validation is in progress; not a public release target yet.
+- Linux: build smoke validation is in progress; not a public release target yet.
 
 ## Backend Bridge Runtime
 
@@ -18,11 +24,16 @@ The packaged app does not require user-installed Node and does not require a run
 
 Tauri bundles the sidecar from `src-tauri/binaries/node-*` using the `bundle.externalBin` configuration. `npm run build:backend` copies the Node executable used for the build into the expected Tauri sidecar filename for the current platform.
 
-Windows release builds currently produce:
+Platform sidecar names follow Tauri target triples:
 
 - `src-tauri/binaries/node-x86_64-pc-windows-msvc.exe`
+- `src-tauri/binaries/node-aarch64-pc-windows-msvc.exe`
+- `src-tauri/binaries/node-x86_64-apple-darwin`
+- `src-tauri/binaries/node-aarch64-apple-darwin`
+- `src-tauri/binaries/node-x86_64-unknown-linux-gnu`
+- `src-tauri/binaries/node-aarch64-unknown-linux-gnu`
 
-The build script is prepared for common macOS and Linux target triples, but public macOS/Linux release publishing still needs platform packaging, signing, and notarization work.
+`npm run build:backend` creates the sidecar for the OS and architecture running the build. Public macOS/Linux release publishing still needs platform packaging, signing, and notarization work.
 
 ## Runtime Resolution
 
@@ -58,12 +69,21 @@ Folder and documentation link opening use Tauri's opener plugin instead of direc
 
 ## CI Smoke Coverage
 
-The smoke workflow runs check/frontend/backend builds and Tauri build smoke on:
+The smoke workflow runs platform build validation on:
 
 - `windows-latest`
 - `ubuntu-latest`
 - `macos-latest`
 
+Each matrix job runs:
+
+1. `npm ci`
+2. `npm run build:backend`
+3. `npm run check:backend`
+4. `npm run check`
+5. `npm run build:tauri`
+6. `npm run check:tauri-sidecar`
+
 Linux jobs install the WebKitGTK/AppIndicator packages required for Tauri builds.
 
-These jobs verify the backend runtime bundle and sidecar are present, but they do not publish macOS or Linux artifacts.
+These jobs verify `backend-dist` exists before Tauri packaging and verify the Tauri build output references the backend runtime resources and platform sidecar where practical. They do not publish macOS or Linux artifacts.
