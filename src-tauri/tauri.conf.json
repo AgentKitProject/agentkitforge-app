@@ -38,6 +38,9 @@
       "icons/128x128.png",
       "icons/128x128@2x.png"
     ],
+    "externalBin": [
+      "binaries/node"
+    ],
     "resources": [
       "backend-dist/validate-agent-kit.mjs",
       "backend-dist/security-utils.mjs",
@@ -52,7 +55,7 @@
       "backend-dist/agent-kit-app-support.mjs",
       "backend-dist/export-agent-kit-codex.mjs",
       "backend-dist/export-agent-kit-claude-code.mjs",
-      "backend-dist/node_modules"
+      "backend-dist/chunks"
     ]
   }
 }

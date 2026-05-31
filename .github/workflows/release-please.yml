@@ -102,6 +102,12 @@ jobs:
       - name: Build Tauri app
         run: npm run build:tauri
 
+      - name: Verify bundled backend runtime
+        run: npm run check:backend
+
+      - name: Verify Tauri sidecar output
+        run: npm run check:tauri-sidecar
+
       - name: Collect release artifacts
         id: artifacts
         shell: pwsh

@@ -533,7 +533,7 @@ fn validate_agent_kit<R: Runtime>(
 ) -> Result<ValidationReport, String> {
     let root_path = canonicalize_directory(&root_path)?;
     let bridge_script = resolve_validation_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -565,7 +565,7 @@ fn list_prepared_prompts<R: Runtime>(
 ) -> Result<serde_json::Value, String> {
     let root_path = canonicalize_directory(&root_path)?;
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -588,7 +588,7 @@ fn render_prepared_prompt<R: Runtime>(
     let input_json = serde_json::to_string(&input.input_values)
         .map_err(|error| format!("Unable to serialize prepared prompt inputs: {error}"))?;
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -613,7 +613,7 @@ fn validate_prepared_prompt_inputs<R: Runtime>(
     let input_json = serde_json::to_string(&input.input_values)
         .map_err(|error| format!("Unable to serialize prepared prompt inputs: {error}"))?;
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -645,7 +645,7 @@ fn create_agent_kit_from_template<R: Runtime>(
     }
 
     let bridge_script = resolve_create_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -682,7 +682,7 @@ fn export_agent_kit_onefile<R: Runtime>(
     let root_path = canonicalize_directory(&input.root_path)?;
     let output_path = resolve_markdown_output_path(&root_path, &input.output_path)?;
     let bridge_script = resolve_export_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -716,7 +716,7 @@ fn package_agent_kit<R: Runtime>(
     let output_folder = canonicalize_directory(&input.output_folder)?;
     let out_file = output_folder.join(default_package_file_name(&root_path));
     let bridge_script = resolve_package_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -749,7 +749,7 @@ fn render_agent_kit_draft<R: Runtime>(
     let draft_file_path = canonicalize_json_file(&input.draft_file_path)?;
     let output_folder = resolve_target_directory(&input.output_folder)?;
     let bridge_script = resolve_render_draft_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -782,7 +782,7 @@ fn render_generated_agent_kit_draft<R: Runtime>(
 ) -> Result<RenderAgentKitDraftResult, String> {
     let output_folder = canonicalize_directory(&input.output_folder)?;
     let bridge_script = resolve_render_generated_draft_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     let draft_json = serde_json::to_string(&input.draft_json)
         .map_err(|error| format!("Unable to serialize generated draft JSON: {error}"))?;
 
@@ -819,7 +819,7 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
     let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
     let model = ai_providers::selected_model(&provider, input.model.as_deref())?;
     let bridge_script = resolve_generate_draft_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let request = serde_json::json!({
         "userRequest": user_request,
@@ -865,7 +865,7 @@ async fn revise_agent_kit_draft_with_ai<R: Runtime>(
     let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
     let model = ai_providers::selected_model(&provider, input.model.as_deref())?;
     let bridge_script = resolve_generate_draft_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let request = serde_json::json!({
         "session": input.session,
@@ -1195,7 +1195,7 @@ fn get_agent_kit_summary<R: Runtime>(
     path: String,
 ) -> Result<serde_json::Value, String> {
     let bridge_script = resolve_app_support_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     let output = Command::new(node_command)
         .arg(&bridge_script)
         .arg("summary")
@@ -1214,7 +1214,7 @@ fn load_agent_kit_as_draft<R: Runtime>(
 ) -> Result<serde_json::Value, String> {
     let kit_path = canonicalize_directory(&path)?;
     let bridge_script = resolve_app_support_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     let output = Command::new(node_command)
         .arg(&bridge_script)
         .arg("load-draft")
@@ -1236,7 +1236,7 @@ fn summarize_example_input_documents<R: Runtime>(
     }
 
     let bridge_script = resolve_app_support_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     let paths_json = serde_json::to_string(&paths)
         .map_err(|error| format!("Unable to serialize example document paths: {error}"))?;
     let output = Command::new(node_command)
@@ -1331,7 +1331,7 @@ fn export_agent_kit_to_codex<R: Runtime>(
     let kit_path = canonicalize_directory(&input.kit_path)?;
     let destination_skills_dir = canonicalize_directory(&input.destination_skills_dir)?;
     let bridge_script = resolve_codex_export_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -1365,7 +1365,7 @@ fn export_agent_kit_to_claude_code<R: Runtime>(
     let kit_path = canonicalize_directory(&input.kit_path)?;
     let destination_dir = canonicalize_directory(&input.destination_dir)?;
     let bridge_script = resolve_claude_code_export_bridge(&app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
 
     let output = Command::new(node_command)
         .arg(&bridge_script)
@@ -1482,7 +1482,7 @@ async fn run_agent_kit_with_openai<R: Runtime>(
     let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
     let bridge_script = resolve_context_builder_bridge(&app)?;
     let working_directory = resolve_command_working_directory(&app);
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     openai_runtime::run_agent_kit_with_openai(
         provider,
         input,
@@ -1629,53 +1629,115 @@ fn resolve_backend_script<R: Runtime>(
     app: &tauri::AppHandle<R>,
     script_name: &str,
 ) -> Result<PathBuf, String> {
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("backend")
-        .join(script_name);
-    if dev_path.exists() {
-        return Ok(dev_path);
+    #[cfg(debug_assertions)]
+    {
+        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("backend")
+            .join(script_name);
+        if dev_path.exists() {
+            eprintln!("AgentKitForge runtime: using development backend bridge {script_name}");
+            return Ok(dev_path);
+        }
     }
 
-    app.path()
+    let resource_path = app.path()
         .resolve(
             format!("backend-dist/{script_name}"),
             tauri::path::BaseDirectory::Resource,
         )
-        .map_err(|error| format!("Unable to locate backend bridge: {error}"))
+        .map_err(|_| runtime_files_missing_error())?;
+
+    if resource_path.exists() {
+        Ok(resource_path)
+    } else {
+        Err(runtime_files_missing_error())
+    }
 }
 
-fn resolve_node_command() -> Result<String, String> {
+fn resolve_node_command<R: Runtime>(_app: &tauri::AppHandle<R>) -> Result<String, String> {
     #[cfg(debug_assertions)]
-    if let Ok(node_path) = std::env::var("AGENTKITFORGE_NODE") {
-        if !node_path.trim().is_empty() {
-            return verify_node_command(node_path);
+    {
+        if let Ok(node_path) = std::env::var("AGENTKITFORGE_NODE") {
+            if !node_path.trim().is_empty() {
+                eprintln!("AgentKitForge runtime: using AGENTKITFORGE_NODE override");
+                return verify_node_command(node_path, false);
+            }
         }
+
+        eprintln!("AgentKitForge runtime: using system Node for development");
+        return verify_node_command("node".to_string(), false);
     }
 
-    verify_node_command("node".to_string())
+    #[cfg(not(debug_assertions))]
+    {
+        let node_path = _app
+            .path()
+            .resolve(
+                bundled_node_resource_name(),
+                tauri::path::BaseDirectory::Resource,
+            )
+            .map_err(|_| runtime_files_missing_error())?;
+
+        if !node_path.exists() {
+            return Err(runtime_files_missing_error());
+        }
+
+        eprintln!("AgentKitForge runtime: using bundled Node sidecar");
+        verify_node_command(node_path.to_string_lossy().into_owned(), true)
+    }
 }
 
-fn verify_node_command(node_command: String) -> Result<String, String> {
+fn verify_node_command(node_command: String, packaged: bool) -> Result<String, String> {
     let output = Command::new(&node_command)
         .arg("--version")
         .output()
-        .map_err(|_| runtime_support_error())?;
+        .map_err(|_| {
+            if packaged {
+                runtime_files_missing_error()
+            } else {
+                runtime_support_error()
+            }
+        })?;
 
     if output.status.success() {
         Ok(node_command)
+    } else if packaged {
+        Err(runtime_files_missing_error())
     } else {
         Err(runtime_support_error())
     }
 }
 
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn bundled_node_resource_name() -> &'static str {
+    "node.exe"
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+fn bundled_node_resource_name() -> &'static str {
+    "node"
+}
+
 fn runtime_support_error() -> String {
-    "AgentKitForge runtime support is unavailable. Reinstall the app or contact support. Developer note: backend bridge commands require a bundled or discoverable Node runtime.".to_string()
+    "AgentKitForge runtime support is unavailable. Install Node for development, or reinstall the packaged app.".to_string()
+}
+
+fn runtime_files_missing_error() -> String {
+    "AgentKitForge runtime files are missing. Please reinstall the app.".to_string()
 }
 
 fn resolve_command_working_directory<R: Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+    #[cfg(debug_assertions)]
+    {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     if repo_root.exists() {
         return repo_root;
+    }
+    }
+
+    #[cfg(not(debug_assertions))]
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        return resource_dir;
     }
 
     app.path()
@@ -2251,7 +2313,7 @@ fn inspect_agent_kit_candidate_inner<R: Runtime>(
     path: &str,
 ) -> Result<AgentKitCandidateInspection, String> {
     let bridge_script = resolve_app_support_bridge(app)?;
-    let node_command = resolve_node_command()?;
+    let node_command = resolve_node_command(&app)?;
     let output = Command::new(node_command)
         .arg(&bridge_script)
         .arg("inspect")

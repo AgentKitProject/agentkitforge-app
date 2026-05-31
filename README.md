@@ -53,7 +53,7 @@ npm install
 
 During development, backend bridge scripts can use a sibling `agentkitforge-core` checkout when it exists. If your core repo lives elsewhere, set `AGENTKITFORGE_ALLOW_DEV_OVERRIDES=1` and `AGENTKITFORGE_CORE_PATH` to the core repo root before launching the app. If Node is not on `PATH`, debug builds can use `AGENTKITFORGE_NODE` to point to the Node executable. Packaged bridge assets do not honor these development override variables.
 
-Packaged builds run `npm run build:backend` before Tauri packaging. This prepares `src-tauri/backend-dist/` with bridge scripts and the runtime dependency closure for `@agentkitforge/core`, so the installed app does not need a `node_modules` folder beside it. The app still needs a Node runtime; see `docs/PORTABILITY.md` for the remaining sidecar/native-runtime decision before macOS/Linux public builds.
+Packaged builds run `npm run build:backend` before Tauri packaging. This bundles the backend bridge scripts, `@agentkitforge/core`, and required JavaScript dependencies into `src-tauri/backend-dist/`, then prepares a platform-specific Node sidecar under `src-tauri/binaries/`. The installed app does not require user-installed Node and does not require a runtime `node_modules` folder. See `docs/PORTABILITY.md` for macOS/Linux packaging notes.
 
 Run the desktop app in development mode:
 
@@ -73,6 +73,7 @@ Run the lightweight local smoke suite:
 ```sh
 npm run check
 npm run build
+npm run check:backend
 ```
 
 This runs the TypeScript/Rust check and the frontend production build. It does not create desktop installer artifacts.
@@ -81,6 +82,7 @@ Create a packaged Tauri desktop build:
 
 ```sh
 npm run build:tauri
+npm run check:backend
 ```
 
 ## Release Build

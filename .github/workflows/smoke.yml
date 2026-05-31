@@ -57,6 +57,10 @@ jobs:
         working-directory: agentkitforge-app
         run: npm run build
 
+      - name: Verify bundled backend runtime
+        working-directory: agentkitforge-app
+        run: npm run check:backend
+
   tauri-build-smoke:
     name: Tauri build smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -99,3 +103,11 @@ jobs:
       - name: Build Tauri app
         working-directory: agentkitforge-app
         run: npm run build:tauri
+
+      - name: Verify bundled backend runtime
+        working-directory: agentkitforge-app
+        run: npm run check:backend
+
+      - name: Verify Tauri sidecar output
+        working-directory: agentkitforge-app
+        run: npm run check:tauri-sidecar
