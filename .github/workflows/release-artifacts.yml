@@ -334,35 +334,63 @@ jobs:
       - name: Verify macOS signing and notarization
         if: ${{ matrix.platform == 'macos' }}
         shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
-          app_path="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -n 1)"
           dmg_path="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f | head -n 1)"
-
-          if [ -z "$app_path" ]; then
-            echo "No macOS app bundle found to verify." >&2
-            exit 1
-          fi
 
           if [ -z "$dmg_path" ]; then
             echo "No macOS DMG found to verify." >&2
             exit 1
           fi
 
-          echo "Verifying app bundle signature: $app_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          codesign --display --verbose=2 "$app_path"
+          if [ -z "${APPLE_API_KEY_PATH:-}" ]; then
+            echo "APPLE_API_KEY_PATH was not prepared before DMG notarization." >&2
+            exit 1
+          fi
 
-          echo "Validating app notarization ticket: $app_path"
-          xcrun stapler validate "$app_path"
+          echo "Submitting final DMG for notarization: $dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
 
-          echo "Assessing app bundle with Gatekeeper: $app_path"
-          spctl --assess --type execute --verbose=4 "$app_path"
+          echo "Stapling final DMG notarization ticket: $dmg_path"
+          xcrun stapler staple "$dmg_path"
 
           echo "Validating DMG notarization ticket: $dmg_path"
           xcrun stapler validate "$dmg_path"
 
           echo "Assessing DMG with Gatekeeper: $dmg_path"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+          mount_point="$(mktemp -d "$RUNNER_TEMP/agentkitforge-dmg.XXXXXX")"
+          mounted=false
+          cleanup() {
+            if [ "$mounted" = true ]; then
+              hdiutil detach "$mount_point" -quiet || true
+            fi
+          }
+          trap cleanup EXIT
+
+          echo "Mounting DMG read-only for contained app verification: $dmg_path"
+          hdiutil attach "$dmg_path" -readonly -nobrowse -mountpoint "$mount_point" -quiet
+          mounted=true
+
+          mounted_app_path="$(find "$mount_point" -maxdepth 2 -name 'AgentKitForge.app' -type d | head -n 1)"
+          if [ -z "$mounted_app_path" ]; then
+            echo "No AgentKitForge.app found inside notarized DMG." >&2
+            exit 1
+          fi
+
+          echo "Verifying mounted app bundle signature: $mounted_app_path"
+          codesign --verify --deep --strict --verbose=2 "$mounted_app_path"
+          codesign --display --verbose=2 "$mounted_app_path"
+
+          echo "Assessing mounted app bundle with Gatekeeper: $mounted_app_path"
+          spctl --assess --type execute --verbose=4 "$mounted_app_path"
 
       - name: Collect Windows artifacts
         if: ${{ matrix.platform == 'windows' }}
