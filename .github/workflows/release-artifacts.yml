@@ -337,7 +337,12 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run build:tauri -- --config src-tauri/tauri.updater.conf.json --bundles dmg
+        run: npm run build:tauri -- --config src-tauri/tauri.updater.conf.json --bundles app,dmg
+
+      - name: List macOS bundle outputs
+        if: ${{ matrix.platform == 'macos' }}
+        shell: bash
+        run: find src-tauri/target/release/bundle -maxdepth 5 -type f | sort
 
       - name: Verify bundled backend runtime
         run: npm run check:backend
