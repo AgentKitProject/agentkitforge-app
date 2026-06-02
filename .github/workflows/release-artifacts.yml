@@ -413,99 +413,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm exec tauri -- bundle --config src-tauri/tauri.updater.conf.json --bundles dmg
 
-      - name: Re-sign Node sidecar and repack macOS DMG
+      - name: Finalize signed macOS release artifacts
         if: ${{ matrix.platform == 'macos' }}
         shell: bash
-        run: |
-          if [ -z "${APPLE_SIGNING_IDENTITY_HASH:-}" ]; then
-            echo "APPLE_SIGNING_IDENTITY_HASH was not set after certificate import." >&2
-            exit 1
-          fi
-
-          app_path="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name 'AgentKitForge.app' -type d | head -n 1)"
-          dmg_path="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -type f | head -n 1)"
-          dmg_script="src-tauri/target/release/bundle/dmg/bundle_dmg.sh"
-          node_path="$app_path/Contents/MacOS/node"
-          main_executable="$app_path/Contents/MacOS/agentkitforge-app"
-          entitlements_path="src-tauri/entitlements/node-sidecar.entitlements.plist"
-
-          if [ -z "$app_path" ]; then
-            echo "No macOS .app bundle found before final DMG repack." >&2
-            exit 1
-          fi
-          if [ -z "$dmg_path" ]; then
-            echo "No macOS DMG found before final DMG repack." >&2
-            exit 1
-          fi
-          if [ ! -f "$dmg_script" ]; then
-            echo "Generated DMG bundling script not found at $dmg_script" >&2
-            exit 1
-          fi
-          chmod +x "$dmg_script"
-          if [ ! -f "$node_path" ]; then
-            echo "Bundled Node sidecar not found at $node_path" >&2
-            exit 1
-          fi
-          if [ ! -f "$main_executable" ]; then
-            echo "Main app executable not found at $main_executable" >&2
-            exit 1
-          fi
-          if [ ! -f "$entitlements_path" ]; then
-            echo "Node sidecar entitlements file not found at $entitlements_path" >&2
-            exit 1
-          fi
-
-          echo "Re-signing bundled Node sidecar after DMG generation: $node_path"
-          codesign --force --options runtime --timestamp \
-            --sign "$APPLE_SIGNING_IDENTITY_HASH" \
-            --entitlements "$entitlements_path" \
-            "$node_path"
-
-          node_entitlements="$RUNNER_TEMP/final-node-sidecar-entitlements.plist"
-          codesign -d --entitlements :- "$node_path" > "$node_entitlements" 2>&1
-          cat "$node_entitlements"
-          grep -q "com.apple.security.cs.allow-jit" "$node_entitlements"
-          grep -q "com.apple.security.cs.allow-unsigned-executable-memory" "$node_entitlements"
-
-          echo "Verifying final signed Node sidecar."
-          codesign --verify --strict --verbose=2 "$node_path"
-
-          echo "Re-signing main app executable after final nested sidecar signing: $main_executable"
-          codesign --force --options runtime --timestamp \
-            --sign "$APPLE_SIGNING_IDENTITY_HASH" \
-            "$main_executable"
-
-          echo "Re-signing .app bundle before final DMG repack: $app_path"
-          codesign --force --options runtime --timestamp \
-            --sign "$APPLE_SIGNING_IDENTITY_HASH" \
-            "$app_path"
-
-          echo "Verifying final .app bundle before DMG repack."
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-
-          dmg_source_dir="$RUNNER_TEMP/agentkitforge-dmg-source"
-          rm -rf "$dmg_source_dir"
-          mkdir -p "$dmg_source_dir"
-          ditto "$app_path" "$dmg_source_dir/AgentKitForge.app"
-
-          echo "Repacking macOS DMG from entitlement-signed app: $dmg_path"
-          rm -f "$dmg_path"
-          "$dmg_script" \
-            --volname "AgentKitForge" \
-            --volicon "src-tauri/target/release/bundle/dmg/icon.icns" \
-            --window-size 660 400 \
-            --icon-size 100 \
-            --icon "AgentKitForge.app" 180 170 \
-            --hide-extension "AgentKitForge.app" \
-            --app-drop-link 480 170 \
-            --no-internet-enable \
-            --skip-jenkins \
-            "$dmg_path" \
-            "$dmg_source_dir"
-
-          echo "Signing repacked macOS DMG: $dmg_path"
-          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY_HASH" "$dmg_path"
-          codesign --verify --deep --strict --verbose=2 "$dmg_path"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/finalize-macos-release-artifacts.sh
 
       - name: List macOS bundle outputs
         if: ${{ matrix.platform == 'macos' }}
