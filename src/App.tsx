@@ -51,6 +51,7 @@ type AiProviderConfig = {
   providerType: AiProviderType;
   baseUrl?: string;
   hasApiKey: boolean;
+  model?: string;
   defaultModel: string;
   supportsStructuredJson: boolean;
   createdAt: string;
@@ -2955,7 +2956,7 @@ function BuildScreen({
     setAiForm((current) => ({
       ...current,
       providerId: current.providerId || settings.defaultAiProviderId || "",
-      model: current.model || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel,
+      model: current.model || provider?.model || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel,
     }));
   }, [settings]);
 
@@ -3394,7 +3395,7 @@ function BuildScreen({
               setAiForm((current) => ({
                 ...current,
                 providerId: event.target.value,
-                model: provider?.defaultModel || current.model,
+                model: provider?.model || provider?.defaultModel || current.model,
               }));
               setAiResult(null);
               setAiError(null);
@@ -3587,7 +3588,7 @@ function BuildScreen({
                 setAiForm((current) => ({
                   ...current,
                   providerId: event.target.value,
-                  model: provider?.defaultModel || current.model,
+                  model: provider?.model || provider?.defaultModel || current.model,
                 }));
               }}
               value={aiForm.providerId}
@@ -4890,7 +4891,7 @@ function UseScreen({
   useEffect(() => {
     const provider = getSelectedProvider(settings, providerId);
     setProviderId((current) => current || settings.defaultAiProviderId || "");
-    setModel((current) => current || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel);
+    setModel((current) => current || provider?.model || provider?.defaultModel || settings.defaultModel || defaultRuntimeModel);
     setContextMode(settings.preferredContextMode);
     setValidationProfile(settings.preferredValidationProfile);
     setIncludePolicies(settings.includePolicies);
@@ -5318,7 +5319,7 @@ function UseScreen({
             onChange={(event) => {
               const provider = settings.aiProviders.find((item) => item.id === event.target.value);
               setProviderId(event.target.value);
-              setModel(provider?.defaultModel || model);
+              setModel(provider?.model || provider?.defaultModel || model);
               setRunResult(null);
               setRunError(null);
             }}
@@ -8465,7 +8466,7 @@ function selectedProviderSupportsStructuredJson(provider: AiProviderConfig | und
 
   return providerSupportsStructuredJson(
     provider.providerType,
-    modelId || provider.defaultModel,
+    modelId || provider.model || provider.defaultModel,
     provider.supportsStructuredJson,
   );
 }

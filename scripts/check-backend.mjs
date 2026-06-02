@@ -1,5 +1,6 @@
 import { access, readdir } from "node:fs/promises";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,7 +40,9 @@ try {
   }
 }
 
-await assertExists(resolveNodeSidecarPath(), "Missing bundled Node sidecar.");
+const nodeSidecarPath = resolveNodeSidecarPath();
+await assertExists(nodeSidecarPath, "Missing bundled Node sidecar.");
+assertNodeSidecarRuns(nodeSidecarPath);
 console.log("Backend runtime bundle check passed.");
 
 async function assertExists(filePath, message) {
@@ -54,6 +57,16 @@ function resolveNodeSidecarPath() {
   const targetTriple = resolveTauriTargetTriple();
   const extension = process.platform === "win32" ? ".exe" : "";
   return path.join(sidecarDir, `node-${targetTriple}${extension}`);
+}
+
+function assertNodeSidecarRuns(sidecarPath) {
+  const check = spawnSync(sidecarPath, ["--version"], {
+    encoding: "utf8",
+  });
+  if (check.error || check.status !== 0) {
+    const detail = check.stderr?.trim() || check.error?.message || "unknown error";
+    throw new Error(`Bundled Node sidecar failed to run: ${detail}`);
+  }
 }
 
 function resolveTauriTargetTriple() {

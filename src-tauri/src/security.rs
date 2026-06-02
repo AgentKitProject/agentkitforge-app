@@ -20,7 +20,8 @@ pub fn redact_user_visible_error(input: &str) -> String {
 }
 
 pub fn validate_http_base_url(value: &str) -> Result<(), String> {
-    let parsed = reqwest::Url::parse(value).map_err(|_| "Base URL must be a valid URL.".to_string())?;
+    let parsed =
+        reqwest::Url::parse(value).map_err(|_| "Base URL must be a valid URL.".to_string())?;
     match parsed.scheme() {
         "https" => Ok(()),
         "http" => {
@@ -57,7 +58,13 @@ fn redact_after_case_insensitive(input: &str, marker: &str) -> String {
         let value_start = start + marker.len();
         output.push_str(&input[cursor..value_start]);
         let value_end = input[value_start..]
-            .find(|character: char| character.is_whitespace() || character == '"' || character == '\'' || character == ',' || character == ';')
+            .find(|character: char| {
+                character.is_whitespace()
+                    || character == '"'
+                    || character == '\''
+                    || character == ','
+                    || character == ';'
+            })
             .map(|index| value_start + index)
             .unwrap_or(input.len());
         output.push_str(REDACTION);
@@ -92,7 +99,9 @@ fn redact_query_value(input: &str, key: &str) -> String {
         let value_start = start + key.len();
         output.push_str(&input[cursor..value_start]);
         let value_end = input[value_start..]
-            .find(|character: char| matches!(character, '&' | '"' | '\'' | ' ' | '\n' | '\r' | '\t'))
+            .find(|character: char| {
+                matches!(character, '&' | '"' | '\'' | ' ' | '\n' | '\r' | '\t')
+            })
             .map(|index| value_start + index)
             .unwrap_or(input.len());
         output.push_str(REDACTION);
@@ -114,7 +123,9 @@ fn redact_credential_urls(input: &str) -> String {
             let scheme_start = cursor + relative_index;
             let authority_start = scheme_start + scheme.len();
             let authority_end = output[authority_start..]
-                .find(|character: char| matches!(character, '/' | ' ' | '\n' | '\r' | '\t' | '"' | '\''))
+                .find(|character: char| {
+                    matches!(character, '/' | ' ' | '\n' | '\r' | '\t' | '"' | '\'')
+                })
                 .map(|index| authority_start + index)
                 .unwrap_or(output.len());
             let authority = &output[authority_start..authority_end];
@@ -132,13 +143,23 @@ fn redact_credential_urls(input: &str) -> String {
 
 fn redact_long_secret_like_tokens(input: &str) -> String {
     input
-        .split_inclusive(|character: char| character.is_whitespace() || matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']'))
+        .split_inclusive(|character: char| {
+            character.is_whitespace()
+                || matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']')
+        })
         .map(|part| {
-            let token = part.trim_matches(|character: char| character.is_whitespace() || matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']'));
+            let token = part.trim_matches(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']')
+            });
             let looks_secret = token.len() >= 32
-                && token.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':'))
+                && token.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+                })
                 && token.chars().any(|character| character.is_ascii_digit())
-                && token.chars().any(|character| character.is_ascii_alphabetic());
+                && token
+                    .chars()
+                    .any(|character| character.is_ascii_alphabetic());
             if looks_secret {
                 part.replace(token, REDACTION)
             } else {

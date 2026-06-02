@@ -21,10 +21,13 @@ pub struct AiProviderConfig {
     pub provider_type: AiProviderType,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
+    pub model: Option<String>,
     pub default_model: String,
     pub supports_structured_json: bool,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,6 +50,7 @@ pub struct PublicAiProviderConfig {
     pub provider_type: AiProviderType,
     pub base_url: Option<String>,
     pub has_api_key: bool,
+    pub model: Option<String>,
     pub default_model: String,
     pub supports_structured_json: bool,
     pub created_at: String,
@@ -153,7 +157,8 @@ pub fn public_provider(config: &AiProviderConfig) -> PublicAiProviderConfig {
         has_api_key: config
             .api_key
             .as_ref()
-            .is_some_and(|key| !key.trim().is_empty()),
+            .is_some_and(|key| is_present_secret(key)),
+        model: config.model.clone(),
         default_model: config.default_model.clone(),
         supports_structured_json: config.supports_structured_json,
         created_at: config.created_at.clone(),
@@ -205,15 +210,29 @@ pub async fn generate_text(
     }
 }
 
-pub fn selected_model(config: &AiProviderConfig, model_override: Option<&str>) -> Result<String, String> {
+pub fn selected_model(
+    config: &AiProviderConfig,
+    model_override: Option<&str>,
+) -> Result<String, String> {
     let model = model_override
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| config.default_model.trim())
+        .filter(|value| is_present_config_value(value))
+        .or_else(|| {
+            config
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| is_present_config_value(value))
+        })
+        .or_else(|| {
+            let default_model = config.default_model.trim();
+            is_present_config_value(default_model).then_some(default_model)
+        })
+        .unwrap_or_default()
         .to_string();
 
     if model.is_empty() {
-        Err("Model is required for the selected provider.".to_string())
+        Err(provider_missing_model_message(config))
     } else {
         Ok(model)
     }
@@ -232,6 +251,7 @@ pub fn validate_provider_config(config: &AiProviderConfig) -> Result<(), String>
         }
         AiProviderType::OpenaiCompatible => {
             required_base_url(config)?;
+            required_api_key(config)?;
         }
         AiProviderType::Ollama => {
             validate_base_url(defaulted_base_url(config, "http://localhost:11434")?.as_str())?;
@@ -246,9 +266,9 @@ fn required_api_key(config: &AiProviderConfig) -> Result<String, String> {
         .api_key
         .as_deref()
         .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| is_present_secret(value))
         .map(str::to_string)
-        .ok_or_else(|| format!("{} API key is required.", config.name))
+        .ok_or_else(|| provider_missing_api_key_message(config))
 }
 
 fn required_base_url(config: &AiProviderConfig) -> Result<String, String> {
@@ -323,7 +343,12 @@ async fn call_openai_compatible(
             temperature: 0.2,
         });
 
-    if let Some(api_key) = config.api_key.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(api_key) = config
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         builder = builder.bearer_auth(api_key);
     }
 
@@ -355,8 +380,8 @@ async fn call_anthropic(
         .map_err(connection_error)?;
 
     let body = checked_body(response, "Anthropic").await?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("Anthropic returned unexpected JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Anthropic returned unexpected JSON: {error}"))?;
     let text = parsed
         .get("content")
         .and_then(|value| value.as_array())
@@ -377,7 +402,10 @@ async fn call_gemini(
     let api_key = required_api_key(config)?;
     let base_url = defaulted_base_url(config, "https://generativelanguage.googleapis.com/v1beta")?;
     let response = reqwest::Client::new()
-        .post(format!("{base_url}/models/{}:generateContent", request.model))
+        .post(format!(
+            "{base_url}/models/{}:generateContent",
+            request.model
+        ))
         .query(&[("key", api_key)])
         .json(&GeminiRequest {
             contents: vec![GeminiContent {
@@ -394,8 +422,8 @@ async fn call_gemini(
         .map_err(connection_error)?;
 
     let body = checked_body(response, "Gemini").await?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("Gemini returned unexpected JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Gemini returned unexpected JSON: {error}"))?;
     let text = parsed
         .get("candidates")
         .and_then(|value| value.as_array())
@@ -409,7 +437,11 @@ async fn call_gemini(
                 .cloned()
                 .unwrap_or_default()
         })
-        .filter_map(|part| part.get("text").and_then(|text| text.as_str()).map(str::to_string))
+        .filter_map(|part| {
+            part.get("text")
+                .and_then(|text| text.as_str())
+                .map(str::to_string)
+        })
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
@@ -438,8 +470,8 @@ async fn call_ollama(
         .map_err(connection_error)?;
 
     let body = checked_body(response, "Ollama").await?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("Ollama returned unexpected JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("Ollama returned unexpected JSON: {error}"))?;
     let text = parsed
         .get("response")
         .and_then(|value| value.as_str())
@@ -454,8 +486,8 @@ async fn response_text_from_openai_responses(
     provider_label: &str,
 ) -> Result<String, String> {
     let body = checked_body(response, provider_label).await?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("{provider_label} returned unexpected JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("{provider_label} returned unexpected JSON: {error}"))?;
 
     let text = parsed
         .get("output_text")
@@ -467,8 +499,18 @@ async fn response_text_from_openai_responses(
                     .get("output")?
                     .as_array()?
                     .iter()
-                    .flat_map(|item| item.get("content").and_then(|content| content.as_array()).cloned().unwrap_or_default())
-                    .filter_map(|content| content.get("text").and_then(|text| text.as_str()).map(str::to_string))
+                    .flat_map(|item| {
+                        item.get("content")
+                            .and_then(|content| content.as_array())
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .filter_map(|content| {
+                        content
+                            .get("text")
+                            .and_then(|text| text.as_str())
+                            .map(str::to_string)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
@@ -485,8 +527,8 @@ async fn response_text_from_chat_completion(
     provider_label: &str,
 ) -> Result<String, String> {
     let body = checked_body(response, provider_label).await?;
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).map_err(|error| format!("{provider_label} returned unexpected JSON: {error}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|error| format!("{provider_label} returned unexpected JSON: {error}"))?;
     let text = parsed
         .get("choices")
         .and_then(|value| value.as_array())
@@ -540,12 +582,65 @@ fn provider_error_message(provider_label: &str, status: StatusCode, body: &str) 
         .unwrap_or_else(|| format!("{provider_label} request failed."));
 
     let hint = match status.as_u16() {
-        401 | 403 => " Check the API key and provider permissions.",
+        401 => " The API key is invalid or was rejected.",
+        403 => " Check account, project, model, or provider permissions.",
         404 => " Check the model ID and base URL.",
         _ => "",
     };
 
-    redact_user_visible_error(&format!("{provider_label} request failed ({status}): {message}{hint}"))
+    redact_user_visible_error(&format!(
+        "{provider_label} request failed ({status}): {message}{hint}"
+    ))
+}
+
+fn provider_missing_api_key_message(config: &AiProviderConfig) -> String {
+    match config.provider_type {
+        AiProviderType::Openai => "OpenAI API key is missing. Add it in Settings.".to_string(),
+        AiProviderType::Anthropic => {
+            "Anthropic API key is missing. Add it in Settings.".to_string()
+        }
+        AiProviderType::Gemini => "Gemini API key is missing. Add it in Settings.".to_string(),
+        AiProviderType::OpenaiCompatible => {
+            format!("{} API key is missing. Add it in Settings.", config.name)
+        }
+        AiProviderType::Ollama => {
+            format!("{} API key is missing. Add it in Settings.", config.name)
+        }
+    }
+}
+
+fn provider_missing_model_message(config: &AiProviderConfig) -> String {
+    match config.provider_type {
+        AiProviderType::Openai => {
+            "OpenAI model is missing. Select a model in Settings.".to_string()
+        }
+        AiProviderType::Anthropic => {
+            "Anthropic model is missing. Select a model in Settings.".to_string()
+        }
+        AiProviderType::Gemini => {
+            "Gemini model is missing. Select a model in Settings.".to_string()
+        }
+        AiProviderType::OpenaiCompatible => {
+            format!(
+                "{} model is missing. Select a model in Settings.",
+                config.name
+            )
+        }
+        AiProviderType::Ollama => {
+            "Ollama model is missing. Select a model in Settings.".to_string()
+        }
+    }
+}
+
+pub fn is_present_config_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && !trimmed.eq_ignore_ascii_case("null")
+        && !trimmed.eq_ignore_ascii_case("undefined")
+}
+
+pub fn is_present_secret(value: &str) -> bool {
+    is_present_config_value(value)
 }
 
 fn connection_error(error: reqwest::Error) -> String {

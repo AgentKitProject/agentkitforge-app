@@ -3,8 +3,8 @@ use std::{fs, path::PathBuf};
 use tauri::{Manager, Runtime};
 
 use crate::ai_providers::{
-    public_provider, validate_provider_config, AiProviderConfig, AiProviderInput, AiProviderType,
-    PublicAiProviderConfig,
+    is_present_config_value, is_present_secret, public_provider, validate_provider_config,
+    AiProviderConfig, AiProviderInput, AiProviderType, PublicAiProviderConfig,
 };
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -23,6 +23,13 @@ struct StoredSettings {
     include_workflows: Option<bool>,
     include_references: Option<bool>,
     last_update_check_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApiKeySource {
+    ProviderSpecific,
+    Legacy,
+    Missing,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +67,9 @@ pub struct PublicSettings {
 
 const DEFAULT_MODEL: &str = "gpt-5.4-mini";
 
-pub fn get_public_settings<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PublicSettings, String> {
+pub fn get_public_settings<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PublicSettings, String> {
     let settings = read_settings_with_migration(app)?;
     let path = settings_path(app)?;
     let providers = normalized_providers(&settings);
@@ -76,7 +85,11 @@ pub fn get_public_settings<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Publ
         }),
         default_model: default_provider
             .map(|provider| provider.default_model.clone())
-            .or_else(|| settings.default_model.filter(|model| !model.trim().is_empty()))
+            .or_else(|| {
+                settings
+                    .default_model
+                    .filter(|model| !model.trim().is_empty())
+            })
             .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         ai_providers: providers.iter().map(public_provider).collect(),
         default_ai_provider_id: default_provider.map(|provider| provider.id.clone()),
@@ -124,7 +137,10 @@ pub fn save_openai_api_key<R: Runtime>(
         provider.api_key = Some(api_key);
         provider.updated_at = now_timestamp();
     } else {
-        providers.push(default_openai_provider(Some(api_key), settings.default_model.clone()));
+        providers.push(default_openai_provider(
+            Some(api_key),
+            settings.default_model.clone(),
+        ));
     }
     settings.ai_providers = Some(providers);
     if settings.default_ai_provider_id.is_none() {
@@ -196,12 +212,7 @@ pub fn save_app_preferences<R: Runtime>(
 
     let mut settings = read_settings_with_migration(app)?;
     settings.default_model = Some(default_model);
-    settings.default_output_folder = Some(
-        input
-            .default_output_folder
-            .trim()
-            .to_string(),
-    );
+    settings.default_output_folder = Some(input.default_output_folder.trim().to_string());
     settings.preferred_validation_profile = Some(input.preferred_validation_profile);
     settings.preferred_context_mode = Some(input.preferred_context_mode);
     settings.theme = Some(input.theme);
@@ -233,7 +244,11 @@ pub fn save_ai_provider<R: Runtime>(
         .api_key
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
-        .or_else(|| existing.as_ref().and_then(|provider| provider.api_key.clone()));
+        .or_else(|| {
+            existing
+                .as_ref()
+                .and_then(|provider| provider.api_key.clone())
+        });
 
     let provider = AiProviderConfig {
         id: id.clone(),
@@ -244,12 +259,16 @@ pub fn save_ai_provider<R: Runtime>(
             .map(|url| url.trim().to_string())
             .filter(|url| !url.is_empty()),
         api_key,
+        model: existing
+            .as_ref()
+            .and_then(|provider| provider.model.clone()),
         default_model: input.default_model.trim().to_string(),
         supports_structured_json: input.supports_structured_json,
         created_at: existing
             .map(|provider| provider.created_at)
             .unwrap_or_else(|| now.clone()),
         updated_at: now,
+        api_key_source: None,
     };
     validate_provider_config(&provider)?;
 
@@ -318,21 +337,10 @@ pub fn get_ai_provider<R: Runtime>(
     provider_id: Option<&str>,
 ) -> Result<AiProviderConfig, String> {
     let settings = read_settings_with_migration(app)?;
-    let providers = normalized_providers(&settings);
-    if providers.is_empty() {
-        return Err("Add an AI provider in Settings before using this feature.".to_string());
-    }
-
-    if let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) {
-        return providers
-            .into_iter()
-            .find(|provider| provider.id == provider_id)
-            .ok_or_else(|| "Selected AI provider was not found.".to_string());
-    }
-
-    default_provider(&providers, settings.default_ai_provider_id.as_deref())
-        .cloned()
-        .ok_or_else(|| "Select a default AI provider in Settings.".to_string())
+    let (provider, api_key_source) = resolve_ai_provider_from_settings(&settings, provider_id)?;
+    log_provider_resolution(&provider, api_key_source);
+    validate_provider_config(&provider)?;
+    Ok(provider)
 }
 
 fn read_settings<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<StoredSettings, String> {
@@ -348,7 +356,9 @@ fn read_settings<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<StoredSettings
         .map_err(|error| format!("Unable to parse local settings file: {error}"))
 }
 
-fn read_settings_with_migration<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<StoredSettings, String> {
+fn read_settings_with_migration<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<StoredSettings, String> {
     let mut settings = read_settings(app)?;
     let providers = normalized_providers(&settings);
     if settings.ai_providers.is_none() || settings.default_ai_provider_id.is_none() {
@@ -390,10 +400,15 @@ fn settings_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, Strin
 }
 
 fn default_library_folder<R: Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
-    let path = app.path()
+    let path = app
+        .path()
         .document_dir()
         .map(|path| path.join("AgentKitForge").join("Kits"))
-        .or_else(|_| app.path().app_local_data_dir().map(|path| path.join("Kits")))
+        .or_else(|_| {
+            app.path()
+                .app_local_data_dir()
+                .map(|path| path.join("Kits"))
+        })
         .unwrap_or_else(|_| PathBuf::from("AgentKitForge").join("Kits"));
     let _ = fs::create_dir_all(&path);
     path
@@ -401,24 +416,209 @@ fn default_library_folder<R: Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
 
 fn normalized_providers(settings: &StoredSettings) -> Vec<AiProviderConfig> {
     let mut providers = settings.ai_providers.clone().unwrap_or_default();
-    if providers.is_empty() || settings.openai_api_key.as_ref().is_some_and(|key| !key.trim().is_empty()) {
+    if providers.is_empty()
+        || settings
+            .openai_api_key
+            .as_ref()
+            .is_some_and(|key| is_present_secret(key))
+    {
         let api_key = settings
             .openai_api_key
             .as_ref()
             .map(|key| key.trim().to_string())
-            .filter(|key| !key.is_empty());
+            .filter(|key| is_present_secret(key));
         if let Some(existing) = providers
             .iter_mut()
             .find(|provider| provider.provider_type == AiProviderType::Openai)
         {
-            if existing.api_key.as_ref().is_none_or(|key| key.trim().is_empty()) {
+            if existing
+                .api_key
+                .as_ref()
+                .is_none_or(|key| !is_present_secret(key))
+            {
                 existing.api_key = api_key;
             }
         } else {
-            providers.push(default_openai_provider(api_key, settings.default_model.clone()));
+            providers.push(default_openai_provider(
+                api_key,
+                settings.default_model.clone(),
+            ));
         }
     }
     providers
+}
+
+fn resolve_ai_provider_from_settings(
+    settings: &StoredSettings,
+    provider_id: Option<&str>,
+) -> Result<(AiProviderConfig, ApiKeySource), String> {
+    let providers = settings.ai_providers.clone().unwrap_or_default();
+    if providers.is_empty() {
+        return Err("Add an AI provider in Settings before using this feature.".to_string());
+    }
+
+    let requested_provider_id = provider_id.map(str::trim).filter(|value| !value.is_empty());
+
+    let selected = if let Some(provider_id) = requested_provider_id {
+        providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .cloned()
+            .ok_or_else(|| "Selected AI provider was not found.".to_string())?
+    } else {
+        default_provider(&providers, settings.default_ai_provider_id.as_deref())
+            .cloned()
+            .ok_or_else(|| "Select a default AI provider in Settings.".to_string())?
+    };
+
+    let mut provider = normalize_selected_provider(selected, settings);
+    let api_key_source = provider_api_key_source(&provider, settings);
+    if provider
+        .api_key
+        .as_ref()
+        .is_none_or(|key| !is_present_secret(key))
+    {
+        provider.api_key = legacy_api_key_for_provider(settings, &provider.provider_type);
+    }
+    let api_key_source = if provider
+        .api_key
+        .as_ref()
+        .is_some_and(|key| is_present_secret(key))
+    {
+        api_key_source
+    } else {
+        ApiKeySource::Missing
+    };
+    provider.api_key_source = Some(api_key_source.as_str().to_string());
+
+    Ok((provider, api_key_source))
+}
+
+fn normalize_selected_provider(
+    mut provider: AiProviderConfig,
+    settings: &StoredSettings,
+) -> AiProviderConfig {
+    provider.name = provider.name.trim().to_string();
+    provider.base_url = provider
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| is_present_config_value(value))
+        .map(normalized_provider_base_url);
+    provider.api_key = provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| is_present_secret(value))
+        .map(str::to_string);
+    provider.model = provider
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| is_present_config_value(value))
+        .map(str::to_string);
+    provider.default_model = provider.default_model.trim().to_string();
+    if !is_present_config_value(&provider.default_model) {
+        provider.default_model = settings
+            .default_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| is_present_config_value(value))
+            .map(str::to_string)
+            .unwrap_or_default();
+    }
+    if provider.base_url.is_none() {
+        provider.base_url =
+            default_base_url_for_provider(&provider.provider_type).map(str::to_string);
+    }
+    provider
+}
+
+fn provider_api_key_source(provider: &AiProviderConfig, settings: &StoredSettings) -> ApiKeySource {
+    if provider
+        .api_key
+        .as_ref()
+        .is_some_and(|key| is_present_secret(key))
+    {
+        ApiKeySource::ProviderSpecific
+    } else if legacy_api_key_for_provider(settings, &provider.provider_type)
+        .as_ref()
+        .is_some_and(|key| is_present_secret(key))
+    {
+        ApiKeySource::Legacy
+    } else {
+        ApiKeySource::Missing
+    }
+}
+
+impl ApiKeySource {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApiKeySource::ProviderSpecific => "provider-specific",
+            ApiKeySource::Legacy => "legacy",
+            ApiKeySource::Missing => "missing",
+        }
+    }
+}
+
+fn legacy_api_key_for_provider(
+    settings: &StoredSettings,
+    provider_type: &AiProviderType,
+) -> Option<String> {
+    match provider_type {
+        AiProviderType::Openai => settings
+            .openai_api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| is_present_secret(value))
+            .map(str::to_string),
+        AiProviderType::Anthropic
+        | AiProviderType::Gemini
+        | AiProviderType::Ollama
+        | AiProviderType::OpenaiCompatible => None,
+    }
+}
+
+fn default_base_url_for_provider(provider_type: &AiProviderType) -> Option<&'static str> {
+    match provider_type {
+        AiProviderType::Openai => Some("https://api.openai.com/v1"),
+        AiProviderType::Anthropic => Some("https://api.anthropic.com/v1"),
+        AiProviderType::Gemini => Some("https://generativelanguage.googleapis.com/v1beta"),
+        AiProviderType::Ollama => Some("http://localhost:11434"),
+        AiProviderType::OpenaiCompatible => None,
+    }
+}
+
+fn normalized_provider_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn log_provider_resolution(provider: &AiProviderConfig, api_key_source: ApiKeySource) {
+    let api_key_length = provider
+        .api_key
+        .as_ref()
+        .map(|key| key.trim().len())
+        .unwrap_or(0);
+    let api_key_source = api_key_source.as_str();
+    let resolved_model = provider
+        .model
+        .as_deref()
+        .filter(|value| is_present_config_value(value))
+        .or_else(|| {
+            let default_model = provider.default_model.trim();
+            is_present_config_value(default_model).then_some(default_model)
+        })
+        .unwrap_or("");
+    eprintln!(
+        "AgentKitForge AI provider resolution: selectedProviderId={}; providerType={:?}; baseUrl={}; resolvedModel={}; apiKeyPresent={}; apiKeyLength={}; apiKeySource={}",
+        provider.id,
+        provider.provider_type,
+        provider.base_url.as_deref().unwrap_or(""),
+        resolved_model,
+        api_key_length > 0,
+        api_key_length,
+        api_key_source
+    );
 }
 
 fn default_provider<'a>(
@@ -430,7 +630,10 @@ fn default_provider<'a>(
         .or_else(|| providers.first())
 }
 
-fn default_openai_provider(api_key: Option<String>, default_model: Option<String>) -> AiProviderConfig {
+fn default_openai_provider(
+    api_key: Option<String>,
+    default_model: Option<String>,
+) -> AiProviderConfig {
     let now = now_timestamp();
     AiProviderConfig {
         id: "openai-default".to_string(),
@@ -438,12 +641,14 @@ fn default_openai_provider(api_key: Option<String>, default_model: Option<String
         provider_type: AiProviderType::Openai,
         base_url: Some("https://api.openai.com/v1".to_string()),
         api_key,
+        model: None,
         default_model: default_model
             .filter(|model| !model.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         supports_structured_json: true,
         created_at: now.clone(),
         updated_at: now,
+        api_key_source: None,
     }
 }
 
@@ -464,4 +669,106 @@ fn now_timestamp() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider_settings_json(openai_api_key: &str, provider_api_key: Option<&str>) -> String {
+        let provider_key = provider_api_key
+            .map(|key| format!(r#""{key}""#))
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            r#"{{
+              "defaultAiProviderId": "openai-default",
+              "openaiApiKey": {openai_api_key},
+              "aiProviders": [
+                {{
+                  "id": "openai-default",
+                  "name": "OpenAI",
+                  "providerType": "openai",
+                  "baseUrl": " https://api.openai.com/v1/ ",
+                  "model": null,
+                  "defaultModel": "gpt-5.4-nano",
+                  "apiKey": {provider_key},
+                  "supportsStructuredJson": true,
+                  "createdAt": "1",
+                  "updatedAt": "1"
+                }}
+              ]
+            }}"#
+        )
+    }
+
+    #[test]
+    fn provider_specific_api_key_wins_when_legacy_openai_key_is_null() {
+        let settings: StoredSettings =
+            serde_json::from_str(&provider_settings_json("null", Some(" provider-key "))).unwrap();
+
+        let (provider, source) =
+            resolve_ai_provider_from_settings(&settings, Some("openai-default")).unwrap();
+
+        assert_eq!(provider.api_key.as_deref(), Some("provider-key"));
+        assert_eq!(source, ApiKeySource::ProviderSpecific);
+        assert_eq!(
+            provider.api_key_source.as_deref(),
+            Some("provider-specific")
+        );
+        assert_eq!(
+            provider.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+    }
+
+    #[test]
+    fn legacy_openai_key_is_used_only_when_provider_key_is_missing() {
+        let settings: StoredSettings =
+            serde_json::from_str(&provider_settings_json(r#"" legacy-key ""#, None)).unwrap();
+
+        let (provider, source) = resolve_ai_provider_from_settings(&settings, None).unwrap();
+
+        assert_eq!(provider.api_key.as_deref(), Some("legacy-key"));
+        assert_eq!(source, ApiKeySource::Legacy);
+        assert_eq!(provider.api_key_source.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn provider_model_falls_back_to_default_model() {
+        let settings: StoredSettings =
+            serde_json::from_str(&provider_settings_json("null", Some("provider-key"))).unwrap();
+        let (provider, _) = resolve_ai_provider_from_settings(&settings, None).unwrap();
+
+        assert_eq!(
+            crate::ai_providers::selected_model(&provider, None).unwrap(),
+            "gpt-5.4-nano"
+        );
+    }
+
+    #[test]
+    fn missing_or_placeholder_key_is_rejected_before_fetch() {
+        let settings: StoredSettings =
+            serde_json::from_str(&provider_settings_json(r#""null""#, Some("undefined"))).unwrap();
+        let (provider, _) = resolve_ai_provider_from_settings(&settings, None).unwrap();
+
+        assert_eq!(
+            validate_provider_config(&provider).unwrap_err(),
+            "OpenAI API key is missing. Add it in Settings."
+        );
+    }
+
+    #[test]
+    fn missing_or_placeholder_model_is_rejected_before_fetch() {
+        let mut settings: StoredSettings =
+            serde_json::from_str(&provider_settings_json("null", Some("provider-key"))).unwrap();
+        let provider = settings.ai_providers.as_mut().unwrap().first_mut().unwrap();
+        provider.default_model = "undefined".to_string();
+
+        let (provider, _) = resolve_ai_provider_from_settings(&settings, None).unwrap();
+
+        assert_eq!(
+            crate::ai_providers::selected_model(&provider, Some("null")).unwrap_err(),
+            "OpenAI model is missing. Select a model in Settings."
+        );
+    }
 }

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path, process::Command};
+use std::{ffi::OsString, fs, path::Path};
 
 use crate::ai_providers::{generate_text, selected_model, AiProviderConfig, GenerateTextRequest};
 use crate::security::redact_user_visible_error;
+use crate::{is_backend_runtime_execution_failure, run_backend_script, BackendNodeCommand};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -84,25 +85,26 @@ struct ContextBuilderResult {
     warnings: Vec<String>,
 }
 
-const DEFAULT_MODEL: &str = "gpt-5-mini";
 const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 1800;
-pub async fn run_agent_kit_with_openai(
+pub(crate) async fn run_agent_kit_with_openai(
     provider: AiProviderConfig,
     input: RunAgentKitInput,
     bridge_script: std::path::PathBuf,
     working_directory: std::path::PathBuf,
-    node_command: String,
+    node_command: BackendNodeCommand,
 ) -> Result<RunAgentKitResult, String> {
     let kit_root = canonicalize_kit_path(&input.kit_path)?;
     let task = required("Task", &input.user_task)?;
-    let model = selected_model(&provider, input.model.as_deref()).unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+    let model = selected_model(&provider, input.model.as_deref())?;
     let max_output_tokens = input
         .max_output_length
         .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
         .clamp(256, 12000);
 
-    let context = build_context(&input, task, bridge_script, working_directory, node_command).await?;
-    let openai_input = compose_openai_input(&context.user_context, input.additional_context.as_deref());
+    let context =
+        build_context(&input, task, bridge_script, working_directory, node_command).await?;
+    let openai_input =
+        compose_openai_input(&context.user_context, input.additional_context.as_deref());
     let approximate_context_length = context.system_context.len() + openai_input.len();
 
     let response_text = generate_text(
@@ -186,7 +188,7 @@ async fn build_context(
     task: String,
     bridge_script: std::path::PathBuf,
     working_directory: std::path::PathBuf,
-    node_command: String,
+    node_command: BackendNodeCommand,
 ) -> Result<ContextBuilderResult, String> {
     let request = ContextBuilderRequest {
         kit_path: input.kit_path.clone(),
@@ -209,11 +211,13 @@ async fn build_context(
     let request_json = serde_json::to_string(&request)
         .map_err(|error| format!("Unable to serialize context request: {error}"))?;
     let output = tauri::async_runtime::spawn_blocking(move || {
-        Command::new(node_command)
-            .arg(bridge_script)
-            .arg(request_json)
-            .current_dir(working_directory)
-            .output()
+        run_backend_script(
+            &node_command,
+            &bridge_script,
+            vec![OsString::from(request_json)],
+            working_directory,
+            "Agent Kit Context Builder",
+        )
     })
     .await
     .map_err(|error| format!("Context builder task failed: {error}"))?
@@ -225,6 +229,8 @@ async fn build_context(
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(if detail.is_empty() {
             "Agent Kit Context Builder failed without output".to_string()
+        } else if is_backend_runtime_execution_failure(&detail) {
+            "Backend runtime failed. See diagnostics.".to_string()
         } else {
             redact_user_visible_error(&detail)
         });
@@ -236,7 +242,10 @@ async fn build_context(
 
 fn compose_openai_input(user_context: &str, additional_context: Option<&str>) -> String {
     let mut input = user_context.trim().to_string();
-    if let Some(additional_context) = additional_context.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(additional_context) = additional_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         input.push_str("\n\nAdditional user context:\n");
         input.push_str(additional_context);
     }

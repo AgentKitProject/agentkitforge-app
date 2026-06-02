@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -13,6 +14,7 @@ try {
 } catch {
   throw new Error(`Missing Tauri release sidecar: ${path.relative(root, sidecarPath)}`);
 }
+assertNodeSidecarRuns(sidecarPath);
 
 const depInfoPath = path.join(releaseDir, "agentkitforge-app.d");
 try {
@@ -31,6 +33,16 @@ try {
 }
 
 console.log(`Tauri packaged runtime check passed: ${path.relative(root, sidecarPath)}`);
+
+function assertNodeSidecarRuns(nodePath) {
+  const check = spawnSync(nodePath, ["--version"], {
+    encoding: "utf8",
+  });
+  if (check.error || check.status !== 0) {
+    const detail = check.stderr?.trim() || check.error?.message || "unknown error";
+    throw new Error(`Tauri release Node sidecar failed to run: ${detail}`);
+  }
+}
 
 function resolveExpectedSourceSidecarName() {
   const targetTriple = resolveTauriTargetTriple();

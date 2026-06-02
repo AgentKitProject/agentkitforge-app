@@ -35,6 +35,8 @@ macOS artifacts, when built on macOS, are expected under:
 - `src-tauri/target/release/bundle/dmg/`
 - `src-tauri/target/release/bundle/macos/`
 
+Installed macOS releases use the bundled Node sidecar at `AgentKitForge.app/Contents/MacOS/node` for backend bridge scripts and do not require system Node. The release workflow signs that Node sidecar with hardened runtime plus V8-compatible entitlements from `src-tauri/entitlements/node-sidecar.entitlements.plist`. Packaged macOS backend launches do not use `--jitless`, because that disables WebAssembly and breaks Node fetch/Undici. Runtime diagnostics are available through the Tauri command `check_packaged_runtime_files` for installer/runtime investigation.
+
 Linux artifacts, when built on Linux, are expected under:
 
 - `src-tauri/target/release/bundle/appimage/`

@@ -1,19 +1,20 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::OsString,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, Runtime};
 use zip::ZipArchive;
 
-mod openai_runtime;
-mod settings;
 mod ai_providers;
+mod openai_runtime;
 mod security;
+mod settings;
 
 use security::redact_user_visible_error;
 use tauri_plugin_opener::OpenerExt;
@@ -22,6 +23,64 @@ const MAX_ZIP_ENTRIES: usize = 2000;
 const MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_ZIP_FILE_UNCOMPRESSED_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_ZIP_PATH_DEPTH: usize = 16;
+const BACKEND_REQUIRED_DIAGNOSTIC_FILES: [&str; 5] = [
+    "generate-agent-kit-draft.mjs",
+    "create-agent-kit.mjs",
+    "render-agent-kit-draft.mjs",
+    "validate-agent-kit.mjs",
+    "agent-kit-app-support.mjs",
+];
+
+#[derive(Debug, Clone)]
+pub(crate) struct BackendNodeCommand {
+    executable: PathBuf,
+    node_args: Vec<String>,
+    packaged: bool,
+}
+
+impl BackendNodeCommand {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.executable);
+        command.args(&self.node_args);
+        command
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PackagedRuntimeDiagnostics {
+    is_dev: bool,
+    os: String,
+    current_executable_path: Option<String>,
+    resource_directory: Option<String>,
+    resolved_node_path: String,
+    node_exists: bool,
+    resolved_backend_dist_path: String,
+    backend_dist_exists: bool,
+    required_backend_files: Vec<RuntimeFileDiagnostic>,
+    node_version_result: RuntimeCommandDiagnostic,
+    node_check_result: RuntimeCommandDiagnostic,
+    fetch_smoke_test_result: RuntimeCommandDiagnostic,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeFileDiagnostic {
+    file_name: String,
+    path: String,
+    exists: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeCommandDiagnostic {
+    attempted: bool,
+    success: bool,
+    exit_code: Option<i32>,
+    stdout_tail: String,
+    stderr_tail: String,
+    error: Option<String>,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -458,7 +517,9 @@ fn select_forge_response_output_path(file_name: Option<String>) -> Result<Option
 }
 
 #[tauri::command]
-fn select_forge_response_text_output_path(file_name: Option<String>) -> Result<Option<String>, String> {
+fn select_forge_response_text_output_path(
+    file_name: Option<String>,
+) -> Result<Option<String>, String> {
     let file_name = file_name
         .map(|name| sanitize_folder_name(name.trim_end_matches(".txt").trim_end_matches(".md")))
         .filter(|name| !name.trim().is_empty())
@@ -535,7 +596,8 @@ fn validate_agent_kit<R: Runtime>(
     let bridge_script = resolve_validation_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&root_path)
         .arg(profile.as_str())
@@ -567,7 +629,8 @@ fn list_prepared_prompts<R: Runtime>(
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("list")
         .arg(&root_path)
@@ -590,7 +653,8 @@ fn render_prepared_prompt<R: Runtime>(
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("render")
         .arg(&root_path)
@@ -615,7 +679,8 @@ fn validate_prepared_prompt_inputs<R: Runtime>(
     let bridge_script = resolve_prepared_prompts_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("validate")
         .arg(&root_path)
@@ -647,7 +712,8 @@ fn create_agent_kit_from_template<R: Runtime>(
     let bridge_script = resolve_create_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&target_path)
         .arg(input.template.as_str())
@@ -684,7 +750,8 @@ fn export_agent_kit_onefile<R: Runtime>(
     let bridge_script = resolve_export_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&root_path)
         .arg(&output_path)
@@ -718,7 +785,8 @@ fn package_agent_kit<R: Runtime>(
     let bridge_script = resolve_package_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&root_path)
         .arg(&out_file)
@@ -747,11 +815,17 @@ fn render_agent_kit_draft<R: Runtime>(
     input: RenderAgentKitDraftInput,
 ) -> Result<RenderAgentKitDraftResult, String> {
     let draft_file_path = canonicalize_json_file(&input.draft_file_path)?;
-    let output_folder = resolve_target_directory(&input.output_folder)?;
+    let draft_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&draft_file_path)
+            .map_err(|error| format!("Unable to read AgentKitDraft JSON: {error}"))?,
+    )
+    .map_err(|error| format!("Unable to parse AgentKitDraft JSON: {error}"))?;
+    let output_folder = resolve_render_output_directory(&app, &input.output_folder, &draft_json)?;
     let bridge_script = resolve_render_draft_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&draft_file_path)
         .arg(&output_folder)
@@ -780,13 +854,15 @@ fn render_generated_agent_kit_draft<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: RenderGeneratedAgentKitDraftInput,
 ) -> Result<RenderAgentKitDraftResult, String> {
-    let output_folder = canonicalize_directory(&input.output_folder)?;
+    let output_folder =
+        resolve_render_output_directory(&app, &input.output_folder, &input.draft_json)?;
     let bridge_script = resolve_render_generated_draft_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
     let draft_json = serde_json::to_string(&input.draft_json)
         .map_err(|error| format!("Unable to serialize generated draft JSON: {error}"))?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(draft_json)
         .arg(&output_folder)
@@ -815,7 +891,8 @@ async fn generate_agent_kit_draft_with_openai<R: Runtime>(
     app: tauri::AppHandle<R>,
     input: GenerateAgentKitDraftInput,
 ) -> Result<GenerateAgentKitDraftResult, String> {
-    let user_request = clean_required_value("Describe the Agent Kit you want", &input.user_request)?;
+    let user_request =
+        clean_required_value("Describe the Agent Kit you want", &input.user_request)?;
     let provider = settings::get_ai_provider(&app, input.provider_id.as_deref())?;
     let model = ai_providers::selected_model(&provider, input.model.as_deref())?;
     let bridge_script = resolve_generate_draft_bridge(&app)?;
@@ -896,7 +973,7 @@ async fn revise_agent_kit_draft_with_ai<R: Runtime>(
 async fn run_ai_draft_bridge<R: Runtime>(
     app: &tauri::AppHandle<R>,
     bridge_script: PathBuf,
-    node_command: String,
+    node_command: BackendNodeCommand,
     provider_json: String,
     request_json: String,
     action: &'static str,
@@ -904,13 +981,14 @@ async fn run_ai_draft_bridge<R: Runtime>(
 ) -> Result<GenerateAgentKitDraftResult, String> {
     let working_directory = resolve_command_working_directory(app);
     let output = tauri::async_runtime::spawn_blocking(move || {
-        Command::new(node_command)
-            .arg(&bridge_script)
-            .arg(action)
-            .env("AGENTKITFORGE_AI_PROVIDER_CONFIG", provider_json)
-            .arg(request_json)
-            .current_dir(working_directory)
-            .output()
+        run_backend_script_with_env(
+            &node_command,
+            &bridge_script,
+            vec![OsString::from(action), OsString::from(request_json)],
+            working_directory,
+            label,
+            vec![("AGENTKITFORGE_AI_PROVIDER_CONFIG", provider_json)],
+        )
     })
     .await
     .map_err(|error| format!("{label} task failed: {error}"))?
@@ -922,6 +1000,10 @@ async fn run_ai_draft_bridge<R: Runtime>(
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(if detail.is_empty() {
             format!("{label} failed without output")
+        } else if is_backend_runtime_execution_failure(&detail) {
+            backend_runtime_failed_error()
+        } else if is_raw_fetch_failed_error(&detail) {
+            "OpenAI network request failed before receiving an HTTP response. See provider diagnostics.".to_string()
         } else {
             redact_user_visible_error(&detail)
         });
@@ -1012,10 +1094,84 @@ fn open_external_url<R: Runtime>(app: tauri::AppHandle<R>, url: String) -> Resul
 }
 
 #[tauri::command]
+fn check_packaged_runtime_files<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<PackagedRuntimeDiagnostics, String> {
+    let is_dev = cfg!(debug_assertions);
+    let os = std::env::consts::OS.to_string();
+    let current_executable_path = std::env::current_exe()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+    let resource_directory = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned());
+
+    let resolved_node_path = diagnostic_node_path(&app);
+    let node_exists = resolved_node_path.exists();
+
+    let backend_dist_path = diagnostic_backend_dist_path(&app);
+    let backend_dist_exists = backend_dist_path.is_dir();
+    let required_backend_files = BACKEND_REQUIRED_DIAGNOSTIC_FILES
+        .iter()
+        .map(|file_name| {
+            let path = backend_dist_path.join(file_name);
+            RuntimeFileDiagnostic {
+                file_name: (*file_name).to_string(),
+                path: path.to_string_lossy().into_owned(),
+                exists: path.is_file(),
+            }
+        })
+        .collect();
+
+    let node_version_result = run_runtime_diagnostic_command({
+        let mut command = Command::new(&resolved_node_path);
+        command.arg("--version");
+        command
+    });
+
+    let node_check_result = {
+        let script_path = backend_dist_path.join("generate-agent-kit-draft.mjs");
+        run_runtime_diagnostic_command({
+            let mut command = Command::new(&resolved_node_path);
+            command.arg("--check").arg(script_path);
+            command
+        })
+    };
+    let fetch_smoke_test_result = run_runtime_diagnostic_command({
+        let mut command = Command::new(&resolved_node_path);
+        command.arg("-e").arg(
+            "fetch('https://api.openai.com/v1/models').then((response) => { console.log(JSON.stringify({ ok: true, status: response.status })); }).catch((error) => { console.error(error && error.stack ? error.stack : String(error)); process.exit(1); });",
+        );
+        command
+    });
+
+    Ok(PackagedRuntimeDiagnostics {
+        is_dev,
+        os,
+        current_executable_path,
+        resource_directory,
+        resolved_node_path: resolved_node_path.to_string_lossy().into_owned(),
+        node_exists,
+        resolved_backend_dist_path: backend_dist_path.to_string_lossy().into_owned(),
+        backend_dist_exists,
+        required_backend_files,
+        node_version_result,
+        node_check_result,
+        fetch_smoke_test_result,
+    })
+}
+
+#[tauri::command]
 fn list_my_kits<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<MyKitEntry>, String> {
     let mut library = read_my_kits_library(&app)?;
+    let changed = merge_discovered_library_kits(&app, &mut library)?;
     for kit in &mut library.kits {
         kit.path_exists = Path::new(&kit.path).is_dir();
+    }
+    if changed {
+        write_my_kits_library(&app, &library)?;
     }
     library
         .kits
@@ -1078,7 +1234,10 @@ fn add_kit_to_library<R: Runtime>(
 }
 
 #[tauri::command]
-fn remove_kit_from_library<R: Runtime>(app: tauri::AppHandle<R>, path: String) -> Result<(), String> {
+fn remove_kit_from_library<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    path: String,
+) -> Result<(), String> {
     let mut library = read_my_kits_library(&app)?;
     library.kits.retain(|kit| !paths_equal(&kit.path, &path));
     write_my_kits_library(&app, &library)
@@ -1114,7 +1273,11 @@ fn refresh_kit_metadata<R: Runtime>(
 #[tauri::command]
 fn mark_library_kit_used<R: Runtime>(app: tauri::AppHandle<R>, path: String) -> Result<(), String> {
     let mut library = read_my_kits_library(&app)?;
-    if let Some(entry) = library.kits.iter_mut().find(|kit| paths_equal(&kit.path, &path)) {
+    if let Some(entry) = library
+        .kits
+        .iter_mut()
+        .find(|kit| paths_equal(&kit.path, &path))
+    {
         let now = now_timestamp();
         entry.last_used_at = Some(now.clone());
         entry.updated_at = now;
@@ -1131,7 +1294,11 @@ fn validate_library_kit<R: Runtime>(
 ) -> Result<ValidationReport, String> {
     let report = validate_agent_kit(app.clone(), path.clone(), profile)?;
     let mut library = read_my_kits_library(&app)?;
-    if let Some(entry) = library.kits.iter_mut().find(|kit| paths_equal(&kit.path, &path)) {
+    if let Some(entry) = library
+        .kits
+        .iter_mut()
+        .find(|kit| paths_equal(&kit.path, &path))
+    {
         let now = now_timestamp();
         entry.last_validated_at = Some(now.clone());
         entry.last_validated_profile = Some(report.profile.clone());
@@ -1153,11 +1320,8 @@ fn import_agent_kit_package<R: Runtime>(
         .validation_profile
         .unwrap_or(ValidationProfile::LocalValid);
     let target_folder_name = package_stem(&package_path)?;
-    let extraction_folder = unique_or_forced_extraction_folder(
-        &destination_root,
-        &target_folder_name,
-        input.force,
-    )?;
+    let extraction_folder =
+        unique_or_forced_extraction_folder(&destination_root, &target_folder_name, input.force)?;
 
     let files = match extract_agent_kit_zip(&package_path, &destination_root, &extraction_folder) {
         Ok(files) => files,
@@ -1196,7 +1360,8 @@ fn get_agent_kit_summary<R: Runtime>(
 ) -> Result<serde_json::Value, String> {
     let bridge_script = resolve_app_support_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("summary")
         .arg(path)
@@ -1215,7 +1380,8 @@ fn load_agent_kit_as_draft<R: Runtime>(
     let kit_path = canonicalize_directory(&path)?;
     let bridge_script = resolve_app_support_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("load-draft")
         .arg(&kit_path)
@@ -1239,7 +1405,8 @@ fn summarize_example_input_documents<R: Runtime>(
     let node_command = resolve_node_command(&app)?;
     let paths_json = serde_json::to_string(&paths)
         .map_err(|error| format!("Unable to serialize example document paths: {error}"))?;
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("example-documents")
         .arg(paths_json)
@@ -1271,7 +1438,9 @@ fn import_agent_kit_from_git<R: Runtime>(
         .map_err(|error| format!("Unable to prepare temporary Git import folder: {error}"))?;
     let clone_folder = temp_root.join("repo");
 
-    if let Err(error) = clone_git_repository(&repository_url, input.reference.as_deref(), &clone_folder) {
+    if let Err(error) =
+        clone_git_repository(&repository_url, input.reference.as_deref(), &clone_folder)
+    {
         let _ = fs::remove_dir_all(&temp_root);
         return Err(error);
     }
@@ -1333,7 +1502,8 @@ fn export_agent_kit_to_codex<R: Runtime>(
     let bridge_script = resolve_codex_export_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&kit_path)
         .arg(&destination_skills_dir)
@@ -1367,7 +1537,8 @@ fn export_agent_kit_to_claude_code<R: Runtime>(
     let bridge_script = resolve_claude_code_export_bridge(&app)?;
     let node_command = resolve_node_command(&app)?;
 
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg(&kit_path)
         .arg(&destination_dir)
@@ -1392,7 +1563,9 @@ fn export_agent_kit_to_claude_code<R: Runtime>(
 }
 
 #[tauri::command]
-fn get_app_settings<R: Runtime>(app: tauri::AppHandle<R>) -> Result<settings::PublicSettings, String> {
+fn get_app_settings<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<settings::PublicSettings, String> {
     settings::get_public_settings(&app)
 }
 
@@ -1582,6 +1755,51 @@ fn resolve_target_directory(path: &str) -> Result<PathBuf, String> {
     Ok(canonical_parent.join(folder_name))
 }
 
+fn resolve_render_output_directory<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    output_path: &str,
+    draft_json: &serde_json::Value,
+) -> Result<PathBuf, String> {
+    let target = resolve_target_directory(output_path)?;
+    let library_root = configured_library_root(app)?;
+    Ok(resolve_render_output_directory_from_paths(
+        target,
+        library_root,
+        draft_json,
+    ))
+}
+
+fn configured_library_root<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    let settings = settings::get_public_settings(app)?;
+    resolve_target_directory(&settings.default_output_folder)
+}
+
+fn resolve_render_output_directory_from_paths(
+    target: PathBuf,
+    library_root: PathBuf,
+    draft_json: &serde_json::Value,
+) -> PathBuf {
+    if paths_equal_path(&target, &library_root) {
+        let folder_name = draft_json
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(sanitize_folder_name)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "agent-kit".to_string());
+        library_root.join(folder_name)
+    } else {
+        target
+    }
+}
+
+fn paths_equal_path(left: &Path, right: &Path) -> bool {
+    let normalize = |path: &Path| {
+        path.to_string_lossy()
+            .trim_end_matches(std::path::MAIN_SEPARATOR)
+            .to_string()
+    };
+    normalize(left) == normalize(right)
+}
 
 fn resolve_validation_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     resolve_backend_script(app, "validate-agent-kit.mjs")
@@ -1595,7 +1813,9 @@ fn resolve_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBu
     resolve_backend_script(app, "export-agent-kit-onefile.mjs")
 }
 
-fn resolve_prepared_prompts_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+fn resolve_prepared_prompts_bridge<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
     resolve_backend_script(app, "prepared-prompts.mjs")
 }
 
@@ -1611,7 +1831,9 @@ fn resolve_codex_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<
     resolve_backend_script(app, "export-agent-kit-codex.mjs")
 }
 
-fn resolve_claude_code_export_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+fn resolve_claude_code_export_bridge<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
     resolve_backend_script(app, "export-agent-kit-claude-code.mjs")
 }
 
@@ -1623,7 +1845,9 @@ fn resolve_generate_draft_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Resul
     resolve_backend_script(app, "generate-agent-kit-draft.mjs")
 }
 
-fn resolve_context_builder_bridge<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+fn resolve_context_builder_bridge<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, String> {
     resolve_backend_script(app, "build-agent-kit-context.mjs")
 }
 
@@ -1648,60 +1872,61 @@ fn resolve_backend_script<R: Runtime>(
         }
     }
 
-    let resource_path = app.path()
+    let resource_path = app
+        .path()
         .resolve(
             format!("backend-dist/{script_name}"),
             tauri::path::BaseDirectory::Resource,
         )
-        .map_err(|_| runtime_files_missing_error())?;
+        .map_err(|_| bundled_backend_missing_error())?;
 
     if resource_path.exists() {
         Ok(resource_path)
     } else {
-        Err(runtime_files_missing_error())
+        Err(bundled_backend_missing_error())
     }
 }
 
-fn resolve_node_command<R: Runtime>(_app: &tauri::AppHandle<R>) -> Result<String, String> {
+fn resolve_node_command<R: Runtime>(
+    _app: &tauri::AppHandle<R>,
+) -> Result<BackendNodeCommand, String> {
     #[cfg(debug_assertions)]
     {
         if let Ok(node_path) = std::env::var("AGENTKITFORGE_NODE") {
             if !node_path.trim().is_empty() {
                 eprintln!("AgentKitForge runtime: using AGENTKITFORGE_NODE override");
-                return verify_node_command(node_path, false);
+                return verify_node_command(build_backend_node_command(
+                    PathBuf::from(node_path),
+                    false,
+                ));
             }
         }
 
         eprintln!("AgentKitForge runtime: using system Node for development");
-        return verify_node_command("node".to_string(), false);
+        return verify_node_command(build_backend_node_command(PathBuf::from("node"), false));
     }
 
     #[cfg(not(debug_assertions))]
     {
-        let node_path = _app
-            .path()
-            .resolve(
-                bundled_node_resource_name(),
-                tauri::path::BaseDirectory::Resource,
-            )
-            .map_err(|_| runtime_files_missing_error())?;
+        let node_path = resolve_packaged_node_path(_app)?;
 
         if !node_path.exists() {
-            return Err(runtime_files_missing_error());
+            return Err(bundled_node_missing_error());
         }
 
         eprintln!("AgentKitForge runtime: using bundled Node sidecar");
-        verify_node_command(node_path.to_string_lossy().into_owned(), true)
+        verify_node_command(build_backend_node_command(node_path, true))
     }
 }
 
-fn verify_node_command(node_command: String, packaged: bool) -> Result<String, String> {
-    let output = Command::new(&node_command)
+fn verify_node_command(node_command: BackendNodeCommand) -> Result<BackendNodeCommand, String> {
+    let output = node_command
+        .command()
         .arg("--version")
         .output()
         .map_err(|_| {
-            if packaged {
-                runtime_files_missing_error()
+            if node_command.packaged {
+                bundled_node_failed_to_start_error()
             } else {
                 runtime_support_error()
             }
@@ -1709,11 +1934,217 @@ fn verify_node_command(node_command: String, packaged: bool) -> Result<String, S
 
     if output.status.success() {
         Ok(node_command)
-    } else if packaged {
-        Err(runtime_files_missing_error())
+    } else if node_command.packaged {
+        log_backend_execution_failure(
+            &node_command,
+            Path::new("<node --version>"),
+            Path::new("."),
+            "Bundled Node runtime preflight",
+            &output,
+        );
+        Err(bundled_node_failed_to_start_error())
     } else {
         Err(runtime_support_error())
     }
+}
+
+fn build_backend_node_command(executable: PathBuf, packaged: bool) -> BackendNodeCommand {
+    BackendNodeCommand {
+        executable,
+        node_args: Vec::new(),
+        packaged,
+    }
+}
+
+fn diagnostic_node_path<R: Runtime>(_app: &tauri::AppHandle<R>) -> PathBuf {
+    if cfg!(debug_assertions) {
+        if let Ok(node_path) = std::env::var("AGENTKITFORGE_NODE") {
+            if !node_path.trim().is_empty() {
+                return PathBuf::from(node_path);
+            }
+        }
+        return PathBuf::from("node");
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(current_exe) = std::env::current_exe() {
+            return packaged_macos_node_path_from_executable(&current_exe);
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Ok(path) = _app.path().resolve(
+            bundled_node_resource_name(),
+            tauri::path::BaseDirectory::Resource,
+        ) {
+            return path;
+        }
+    }
+
+    PathBuf::from(bundled_node_resource_name())
+}
+
+fn diagnostic_backend_dist_path<R: Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+    if cfg!(debug_assertions) {
+        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("backend");
+        if dev_path.exists() {
+            return dev_path;
+        }
+    }
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        return packaged_backend_dist_path_from_resource_dir(&resource_dir);
+    }
+
+    PathBuf::from("backend-dist")
+}
+
+fn run_runtime_diagnostic_command(mut command: Command) -> RuntimeCommandDiagnostic {
+    match command.output() {
+        Ok(output) => RuntimeCommandDiagnostic {
+            attempted: true,
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            stdout_tail: tail_for_log(&output.stdout),
+            stderr_tail: tail_for_log(&output.stderr),
+            error: None,
+        },
+        Err(error) => RuntimeCommandDiagnostic {
+            attempted: true,
+            success: false,
+            exit_code: None,
+            stdout_tail: String::new(),
+            stderr_tail: String::new(),
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn resolve_packaged_node_path<R: Runtime>(_app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let current_exe = std::env::current_exe()
+            .map_err(|error| format!("Unable to resolve current app executable: {error}"))?;
+        return Ok(packaged_macos_node_path_from_executable(&current_exe));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        _app.path()
+            .resolve(
+                bundled_node_resource_name(),
+                tauri::path::BaseDirectory::Resource,
+            )
+            .map_err(|_| bundled_node_missing_error())
+    }
+}
+
+fn packaged_macos_node_path_from_executable(executable_path: &Path) -> PathBuf {
+    executable_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("node")
+}
+
+fn packaged_backend_dist_path_from_resource_dir(resource_dir: &Path) -> PathBuf {
+    resource_dir.join("backend-dist")
+}
+
+pub(crate) fn run_backend_script(
+    node_command: &BackendNodeCommand,
+    script_path: &Path,
+    args: Vec<OsString>,
+    cwd: PathBuf,
+    label: &str,
+) -> Result<Output, String> {
+    run_backend_script_with_env(node_command, script_path, args, cwd, label, Vec::new())
+}
+
+pub(crate) fn run_backend_script_with_env(
+    node_command: &BackendNodeCommand,
+    script_path: &Path,
+    args: Vec<OsString>,
+    cwd: PathBuf,
+    label: &str,
+    envs: Vec<(&'static str, String)>,
+) -> Result<Output, String> {
+    let mut command = node_command.command();
+    command.arg(script_path).args(args).current_dir(&cwd);
+    for (name, value) in envs {
+        command.env(name, value);
+    }
+
+    let output = command.output().map_err(|error| {
+        log_backend_start_failure(node_command, script_path, &cwd, label, &error);
+        if node_command.packaged {
+            bundled_node_failed_to_start_error()
+        } else {
+            format!("Unable to run {label}: {error}")
+        }
+    })?;
+
+    if !output.status.success() {
+        log_backend_execution_failure(node_command, script_path, &cwd, label, &output);
+    }
+
+    Ok(output)
+}
+
+fn log_backend_start_failure(
+    node_command: &BackendNodeCommand,
+    script_path: &Path,
+    cwd: &Path,
+    label: &str,
+    error: &io::Error,
+) {
+    eprintln!(
+        "AgentKitForge backend execution failed to start: label={label}; node={}; script={}; cwd={}; packaged={}; error={}",
+        node_command.executable.display(),
+        script_path.display(),
+        cwd.display(),
+        node_command.packaged,
+        error
+    );
+}
+
+fn log_backend_execution_failure(
+    node_command: &BackendNodeCommand,
+    script_path: &Path,
+    cwd: &Path,
+    label: &str,
+    output: &Output,
+) {
+    eprintln!(
+        "AgentKitForge backend execution failed: label={label}; node={}; script={}; cwd={}; packaged={}; exit_code={:?}; stderr_tail={}; stdout_tail={}",
+        node_command.executable.display(),
+        script_path.display(),
+        cwd.display(),
+        node_command.packaged,
+        output.status.code(),
+        tail_for_log(&output.stderr),
+        tail_for_log(&output.stdout)
+    );
+}
+
+fn tail_for_log(bytes: &[u8]) -> String {
+    const MAX_LOG_TAIL_CHARS: usize = 204;
+    let text = String::from_utf8_lossy(bytes)
+        .replace('\r', "\\r")
+        .replace('\n', "\\n");
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() > MAX_LOG_TAIL_CHARS {
+        chars[chars.len() - MAX_LOG_TAIL_CHARS..].iter().collect()
+    } else {
+        text
+    }
+}
+
+#[cfg(debug_assertions)]
+fn bundled_node_resource_name() -> &'static str {
+    "node"
 }
 
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
@@ -1730,17 +2161,30 @@ fn runtime_support_error() -> String {
     "AgentKitForge runtime support is unavailable. Install Node for development, or reinstall the packaged app.".to_string()
 }
 
-fn runtime_files_missing_error() -> String {
-    "AgentKitForge runtime files are missing. Please reinstall the app.".to_string()
+#[cfg(any(test, not(debug_assertions)))]
+fn bundled_node_missing_error() -> String {
+    "Bundled Node runtime was not found.".to_string()
+}
+
+fn bundled_backend_missing_error() -> String {
+    "Bundled backend runtime files were not found.".to_string()
+}
+
+fn bundled_node_failed_to_start_error() -> String {
+    "Bundled Node runtime failed to start.".to_string()
+}
+
+fn backend_runtime_failed_error() -> String {
+    "Backend runtime failed. See diagnostics.".to_string()
 }
 
 fn resolve_command_working_directory<R: Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
     #[cfg(debug_assertions)]
     {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-    if repo_root.exists() {
-        return repo_root;
-    }
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        if repo_root.exists() {
+            return repo_root;
+        }
     }
 
     #[cfg(not(debug_assertions))]
@@ -1913,7 +2357,10 @@ fn starter_excerpt(content: &str) -> Option<String> {
 }
 
 fn clean_optional(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|value| !value.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 fn split_lines_or_commas(value: Option<&str>) -> Option<Vec<String>> {
@@ -1996,6 +2443,52 @@ fn write_my_kits_library<R: Runtime>(
     fs::write(path, content).map_err(|error| format!("Unable to save My Kits library: {error}"))
 }
 
+fn merge_discovered_library_kits<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    library: &mut MyKitsLibrary,
+) -> Result<bool, String> {
+    let library_root = configured_library_root(app)?;
+    let mut changed = false;
+
+    for kit_path in discover_agent_kit_folders(&library_root)? {
+        let normalized_path = kit_path.to_string_lossy().into_owned();
+        if library
+            .kits
+            .iter()
+            .any(|kit| paths_equal(&kit.path, &normalized_path))
+        {
+            continue;
+        }
+
+        if let Ok(entry) = metadata_entry_from_path(&kit_path, KitLibrarySource::Built) {
+            library.kits.push(entry);
+            changed = true;
+        }
+    }
+
+    Ok(changed)
+}
+
+fn discover_agent_kit_folders(library_root: &Path) -> Result<Vec<PathBuf>, String> {
+    if !library_root.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut kits = Vec::new();
+    for entry in fs::read_dir(library_root)
+        .map_err(|error| format!("Unable to read My Kits folder: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Unable to read My Kits folder entry: {error}"))?;
+        let path = entry.path();
+        if path.is_dir() && path.join("agentkit.yaml").is_file() {
+            kits.push(path);
+        }
+    }
+    kits.sort();
+    Ok(kits)
+}
+
 fn my_kits_library_path<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
     app.path()
         .app_local_data_dir()
@@ -2020,8 +2513,8 @@ fn read_kit_metadata(root_path: &Path) -> Result<KitMetadata, String> {
     let version = read_manifest_scalar(&manifest, "version")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "unknown".to_string());
-    let description = read_manifest_scalar(&manifest, "description")
-        .filter(|value| !value.trim().is_empty());
+    let description =
+        read_manifest_scalar(&manifest, "description").filter(|value| !value.trim().is_empty());
 
     Ok(KitMetadata {
         id,
@@ -2031,7 +2524,10 @@ fn read_kit_metadata(root_path: &Path) -> Result<KitMetadata, String> {
     })
 }
 
-fn metadata_entry_from_path(root_path: &Path, source: KitLibrarySource) -> Result<MyKitEntry, String> {
+fn metadata_entry_from_path(
+    root_path: &Path,
+    source: KitLibrarySource,
+) -> Result<MyKitEntry, String> {
     let metadata = read_kit_metadata(root_path)?;
     let now = now_timestamp();
     Ok(MyKitEntry {
@@ -2230,9 +2726,7 @@ fn path_depth(path: &Path) -> usize {
     path.components().count()
 }
 
-fn detect_archive_root_folder(
-    archive: &mut ZipArchive<File>,
-) -> Result<Option<String>, String> {
+fn detect_archive_root_folder(archive: &mut ZipArchive<File>) -> Result<Option<String>, String> {
     let mut common_root: Option<String> = None;
     let mut has_root_manifest = false;
 
@@ -2310,7 +2804,9 @@ fn ensure_child_path(root: &Path, child: &Path) -> Result<(), String> {
     };
 
     if !child_parent.starts_with(&root) && child_parent != root {
-        return Err("Import destination must stay inside the selected destination folder.".to_string());
+        return Err(
+            "Import destination must stay inside the selected destination folder.".to_string(),
+        );
     }
 
     Ok(())
@@ -2322,7 +2818,8 @@ fn inspect_agent_kit_candidate_inner<R: Runtime>(
 ) -> Result<AgentKitCandidateInspection, String> {
     let bridge_script = resolve_app_support_bridge(app)?;
     let node_command = resolve_node_command(&app)?;
-    let output = Command::new(node_command)
+    let output = node_command
+        .command()
         .arg(&bridge_script)
         .arg("inspect")
         .arg(path)
@@ -2358,7 +2855,11 @@ fn repo_folder_name_from_url(url: &str) -> String {
     sanitize_folder_name(name)
 }
 
-fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) -> Result<(), String> {
+fn clone_git_repository(
+    url: &str,
+    reference: Option<&str>,
+    destination: &Path,
+) -> Result<(), String> {
     let mut command = Command::new("git");
     command.arg("clone").arg("--depth").arg("1");
     if let Some(reference) = clean_optional(reference) {
@@ -2378,8 +2879,7 @@ fn clone_git_repository(url: &str, reference: Option<&str>, destination: &Path) 
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     let detail = if stderr.is_empty() {
-        "Git clone failed without additional output."
-            .to_string()
+        "Git clone failed without additional output.".to_string()
     } else {
         redact_user_visible_error(&stderr)
     };
@@ -2392,7 +2892,10 @@ struct CopyAgentKitDirectoryResult {
     warnings: Vec<String>,
 }
 
-fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<CopyAgentKitDirectoryResult, String> {
+fn copy_agent_kit_directory(
+    source: &Path,
+    destination: &Path,
+) -> Result<CopyAgentKitDirectoryResult, String> {
     if !source.is_dir() {
         return Err("Git repository did not produce a folder to import.".to_string());
     }
@@ -2401,7 +2904,13 @@ fn copy_agent_kit_directory(source: &Path, destination: &Path) -> Result<CopyAge
         .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
     let mut files = Vec::new();
     let mut skipped_symlinks = Vec::new();
-    copy_agent_kit_directory_inner(source, source, destination, &mut files, &mut skipped_symlinks)?;
+    copy_agent_kit_directory_inner(
+        source,
+        source,
+        destination,
+        &mut files,
+        &mut skipped_symlinks,
+    )?;
     files.sort();
     skipped_symlinks.sort();
     let warnings = if skipped_symlinks.is_empty() {
@@ -2447,7 +2956,13 @@ fn copy_agent_kit_directory_inner(
             ensure_child_path(destination, &destination_path)?;
             fs::create_dir_all(&destination_path)
                 .map_err(|error| format!("Unable to create imported kit folder: {error}"))?;
-            copy_agent_kit_directory_inner(root, &source_path, destination, files, skipped_symlinks)?;
+            copy_agent_kit_directory_inner(
+                root,
+                &source_path,
+                destination,
+                files,
+                skipped_symlinks,
+            )?;
         } else {
             if let Some(parent) = destination_path.parent() {
                 fs::create_dir_all(parent)
@@ -2463,7 +2978,10 @@ fn copy_agent_kit_directory_inner(
     Ok(())
 }
 
-fn run_command_with_timeout(mut command: Command, timeout: Duration) -> Result<std::process::Output, String> {
+fn run_command_with_timeout(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
     let mut child = command.spawn().map_err(|error| error.to_string())?;
     let start = Instant::now();
     loop {
@@ -2506,7 +3024,10 @@ fn unquote_yaml_scalar(value: &str) -> String {
 }
 
 fn paths_equal(left: &str, right: &str) -> bool {
-    match (Path::new(left).canonicalize(), Path::new(right).canonicalize()) {
+    match (
+        Path::new(left).canonicalize(),
+        Path::new(right).canonicalize(),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => left.eq_ignore_ascii_case(right),
     }
@@ -2522,6 +3043,8 @@ fn parse_node_json_output<T: for<'de> Deserialize<'de>>(
         let detail = if stderr.is_empty() { stdout } else { stderr };
         return Err(if detail.is_empty() {
             format!("{label} failed without output")
+        } else if is_backend_runtime_execution_failure(&detail) {
+            backend_runtime_failed_error()
         } else {
             redact_user_visible_error(&detail)
         });
@@ -2536,6 +3059,137 @@ fn now_timestamp() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string())
+}
+
+pub(crate) fn is_backend_runtime_execution_failure(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("fatal process out of memory")
+        || detail.contains("failed to reserve virtual memory")
+        || detail.contains("coderange")
+}
+
+fn is_raw_fetch_failed_error(detail: &str) -> bool {
+    detail.trim().eq_ignore_ascii_case("fetch failed")
+        || detail
+            .lines()
+            .last()
+            .is_some_and(|line| line.trim().eq_ignore_ascii_case("fetch failed"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_node_command_builder_does_not_add_node_flags() {
+        let command = build_backend_node_command(PathBuf::from("node"), true);
+
+        assert!(command.node_args.is_empty());
+    }
+
+    #[test]
+    fn packaged_macos_resolver_points_to_contents_macos_node() {
+        let executable =
+            PathBuf::from("/Applications/AgentKitForge.app/Contents/MacOS/AgentKitForge");
+
+        assert_eq!(
+            packaged_macos_node_path_from_executable(&executable),
+            PathBuf::from("/Applications/AgentKitForge.app/Contents/MacOS/node")
+        );
+    }
+
+    #[test]
+    fn packaged_resource_resolver_points_to_backend_dist() {
+        let resource_dir = PathBuf::from("/Applications/AgentKitForge.app/Contents/Resources");
+
+        assert_eq!(
+            packaged_backend_dist_path_from_resource_dir(&resource_dir),
+            PathBuf::from("/Applications/AgentKitForge.app/Contents/Resources/backend-dist")
+        );
+    }
+
+    #[test]
+    fn missing_file_errors_are_distinct_from_execution_failures() {
+        assert_eq!(
+            bundled_node_missing_error(),
+            "Bundled Node runtime was not found."
+        );
+        assert_eq!(
+            bundled_backend_missing_error(),
+            "Bundled backend runtime files were not found."
+        );
+        assert_eq!(
+            bundled_node_failed_to_start_error(),
+            "Bundled Node runtime failed to start."
+        );
+        assert_eq!(
+            backend_runtime_failed_error(),
+            "Backend runtime failed. See diagnostics."
+        );
+    }
+
+    #[test]
+    fn raw_fetch_failed_errors_are_detected_for_user_friendly_messages() {
+        assert!(is_raw_fetch_failed_error("fetch failed"));
+        assert!(is_raw_fetch_failed_error(
+            "AgentKitForge Build with AI provider config: apiKeyPresent=true\nfetch failed"
+        ));
+        assert!(!is_raw_fetch_failed_error("OpenAI network request failed."));
+    }
+
+    #[test]
+    fn render_output_uses_child_folder_when_target_is_library_root() {
+        let draft = serde_json::json!({ "id": "weekly-finance-review" });
+        let target = resolve_render_output_directory_from_paths(
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits"),
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits"),
+            &draft,
+        );
+
+        assert_eq!(
+            target,
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits/weekly-finance-review")
+        );
+    }
+
+    #[test]
+    fn render_output_keeps_explicit_existing_kit_folder() {
+        let draft = serde_json::json!({ "id": "weekly-finance-review" });
+        let target = resolve_render_output_directory_from_paths(
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits/existing-kit"),
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits"),
+            &draft,
+        );
+
+        assert_eq!(
+            target,
+            PathBuf::from("/Users/example/Documents/AgentKitForge/Kits/existing-kit")
+        );
+    }
+
+    #[test]
+    fn discovers_direct_child_kit_folders() {
+        let root =
+            std::env::temp_dir().join(format!("agentkitforge-discovery-test-{}", now_timestamp()));
+        let kit = root.join("sample-kit");
+        let nested = kit.join("nested-kit");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            kit.join("agentkit.yaml"),
+            "id: sample-kit\nname: Sample Kit\n",
+        )
+        .unwrap();
+        fs::write(
+            nested.join("agentkit.yaml"),
+            "id: nested-kit\nname: Nested Kit\n",
+        )
+        .unwrap();
+
+        let discovered = discover_agent_kit_folders(&root).unwrap();
+
+        assert_eq!(discovered, vec![kit]);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2595,6 +3249,7 @@ pub fn run() {
             load_agent_kit_as_draft,
             summarize_example_input_documents,
             import_agent_kit_from_git,
+            check_packaged_runtime_files,
             open_external_url,
             export_agent_kit_to_codex,
             export_agent_kit_to_claude_code

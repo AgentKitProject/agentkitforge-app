@@ -20,6 +20,13 @@ For packaged builds, `npm run build:backend` prepares:
 
 The packaged app does not require user-installed Node and does not require a runtime `node_modules` folder.
 
+Installed macOS apps launch the bundled Node executable from `AgentKitForge.app/Contents/MacOS/node`. Public macOS release workflows sign this sidecar with hardened runtime and the V8-compatible entitlements in `src-tauri/entitlements/node-sidecar.entitlements.plist`:
+
+- `com.apple.security.cs.allow-jit`
+- `com.apple.security.cs.allow-unsigned-executable-memory`
+
+The app does not pass `--jitless` and does not rely on `NODE_OPTIONS=--jitless`. `--jitless` disables WebAssembly in this runtime path and breaks Node fetch/Undici, so the packaged sidecar must be signed with the entitlements V8 needs instead.
+
 ## Node Sidecar
 
 Tauri bundles the sidecar from `src-tauri/binaries/node-*` using the `bundle.externalBin` configuration. `npm run build:backend` copies the Node executable used for the build into the expected Tauri sidecar filename for the current platform.
@@ -33,7 +40,13 @@ Platform sidecar names follow Tauri target triples:
 - `src-tauri/binaries/node-x86_64-unknown-linux-gnu`
 - `src-tauri/binaries/node-aarch64-unknown-linux-gnu`
 
-`npm run build:backend` creates the sidecar for the OS and architecture running the build.
+`npm run build:backend` creates the sidecar for the OS and architecture running the build. By default it copies the Node executable running the build, but release/local packaging can set:
+
+```text
+AGENTKITFORGE_NODE_SIDECAR=/absolute/path/to/node
+```
+
+Use this when the build `node` is not suitable as a standalone sidecar. On macOS, `build:backend` rejects Node binaries with unresolved `@rpath` dynamic-library dependencies, such as Homebrew Node builds that require `libnode.*.dylib`, because Tauri's `externalBin` packaging copies the sidecar executable but not Homebrew's shared library tree. The backend and Tauri sidecar checks also execute the copied Node with `--version` so broken sidecars fail in CI before release artifacts are uploaded.
 
 ## macOS Signing and Notarization
 
@@ -66,11 +79,16 @@ Packaged builds use:
 1. Bundled Node sidecar.
 2. Bundled bridge resources under `backend-dist/`.
 
-Packaged builds do not fall back to system Node. If required runtime files are missing, the app returns:
+Packaged builds do not fall back to system Node. Missing runtime files and execution failures are reported separately:
 
 ```text
-AgentKitForge runtime files are missing. Please reinstall the app.
+Bundled Node runtime was not found.
+Bundled backend runtime files were not found.
+Bundled Node runtime failed to start.
+Backend runtime failed. See diagnostics.
 ```
+
+The Tauri command `check_packaged_runtime_files` returns JSON-safe diagnostics for packaged runtime issues. It reports the current executable path, resource directory, resolved Node path, `backend-dist` path, required backend file presence, `node --version`, normal `node --check generate-agent-kit-draft.mjs`, and a safe fetch smoke-test result. Diagnostics must not include provider API keys, prompts, request bodies, or other secrets.
 
 ## Developer Overrides
 
