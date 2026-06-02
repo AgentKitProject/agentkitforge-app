@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.4.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.3.0...v0.4.0) (2026-06-02)
+
+
+### Features
+
+* add Windows Trusted Signing for release artifacts ([5b4f265](https://github.com/AgentKitProject/agentkitforge-app/commit/5b4f265ddb063bc23f82d36cf33e09da56ba52fd))
+
 ## [0.3.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.2.1...v0.3.0) (2026-05-31)
 
 
