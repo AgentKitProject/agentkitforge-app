@@ -29,6 +29,8 @@ Tauri updater signing is separate from:
 - macOS Developer ID signing and notarization
 - any future Tauri updater or channel policy changes
 
+Windows release installers are Authenticode signed with Microsoft Artifact Signing / Trusted Signing before checksums and upload, but those Authenticode signatures do not replace Tauri updater `.sig` files. The workflow uses Azure OIDC through GitHub Actions and does not store Azure client secrets in this app repository. Microsoft Defender SmartScreen reputation may still build over time even for signed installers.
+
 The updater public key is committed in the Tauri app configuration. The updater private key must never be committed and must only be provided to release workflows through GitHub secrets:
 
 - `TAURI_SIGNING_PRIVATE_KEY`

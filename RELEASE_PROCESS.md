@@ -47,6 +47,8 @@ Suggested public artifact names:
 - `AgentKitForge-0.1.0-x64.msi`
 - `checksums.txt`
 
+Public Windows release artifacts are signed in GitHub Actions with Microsoft Artifact Signing / Trusted Signing after the installers are collected and renamed, and before checksums, GitHub Release upload, updater metadata generation, or infra mirror dispatch. Local development builds remain unsigned.
+
 ## Release Please
 
 Release PRs are generated automatically by Release Please from Conventional Commits on `main`.
@@ -102,11 +104,35 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
   Set-Content .\checksums.txt
 ```
 
+For Windows releases, generate checksums only after Microsoft Artifact Signing / Trusted Signing and Authenticode verification complete. Signing changes the installer bytes, so pre-signing checksums are invalid for public release assets.
+
+## Windows Code Signing
+
+Windows user-facing release artifacts are Authenticode signed with Microsoft Artifact Signing / Trusted Signing in the Windows release jobs:
+
+- `AgentKitForge-${version}-setup.exe`
+- `AgentKitForge-${version}-x64.msi`
+
+The workflow authenticates to Azure with GitHub Actions OIDC through `azure/login`; it does not store an Azure client secret or any long-lived Azure credential in the app repository. Configure these values as repository variables where practical:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `TRUSTED_SIGNING_ACCOUNT_NAME`
+- `TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
+- `TRUSTED_SIGNING_ENDPOINT`
+
+The Azure principal used by OIDC must have permission to sign with the Trusted Signing certificate profile, such as the certificate profile signer role. The workflow signs only after the Windows installers and Tauri updater `.sig` files have been collected into `release-assets`, then verifies the `.exe` and `.msi` with SignTool before checksum generation and upload.
+
+Windows Authenticode signing is separate from Tauri updater signing. Authenticode proves publisher identity and installer integrity to Windows, while Tauri updater `.sig` files are verified by installed AgentKitForge apps before applying updates. Do not replace updater `.sig` files with Authenticode signatures.
+
+Signed Windows apps can still see Microsoft Defender SmartScreen warnings until publisher/application reputation builds over time. A valid signature removes the unknown-publisher condition, but reputation is not instant.
+
 ## Release Artifacts
 
 1. Release Please publishes the GitHub Release and tag.
 2. The `release-please.yml` workflow runs a dependent `build-release-artifacts` job when a release was created.
-3. The automatic job builds Windows installers on `windows-latest`, signed/notarized macOS DMG artifacts on `macos-latest`, and Linux packages on `ubuntu-latest`.
+3. The automatic job builds signed Windows installers on `windows-latest`, signed/notarized macOS DMG artifacts on `macos-latest`, and Linux packages on `ubuntu-latest`.
 4. The job uploads these assets to the GitHub Release:
    - `AgentKitForge-${version}-setup.exe`
    - `AgentKitForge-${version}-x64.msi`
@@ -129,6 +155,7 @@ Get-FileHash .\AgentKitForge-0.1.0-setup.exe, .\AgentKitForge-0.1.0-x64.msi -Alg
    - every selected platform has a checksum file
    - every manifest-listed artifact exists on the GitHub Release
    - every updater metadata platform entry has both a URL asset and matching `.sig` asset
+   - Windows installers were Authenticode signed with Microsoft Artifact Signing / Trusted Signing and verified with SignTool before upload
    - macOS artifacts were signed, notarized, stapled, and Gatekeeper-verified before upload
 7. The workflow uploads `AgentKitForge-${version}-update-metadata.json` to the GitHub Release.
 8. Only after verification passes, the job dispatches the private infra repo with event type `app-release-published`.
@@ -161,6 +188,9 @@ The updater private key must never be committed. Updater signatures are mandator
 ## Current Release Caveats
 
 - Windows release artifacts are signed with Microsoft Artifact Signing / Trusted Signing in GitHub Actions before checksums are generated. Local development builds are unsigned.
+- Windows signing uses Azure OIDC and does not require Azure client secrets or long-lived Azure credentials in this repository.
+- Windows Authenticode signing is separate from Tauri updater signing. The Windows `.sig` files uploaded with release assets remain Tauri updater signatures.
+- Microsoft Defender SmartScreen reputation can still build over time even when installers are signed with a valid Trusted Signing certificate profile.
 - macOS public release artifacts are signed with Apple Developer ID, notarized with App Store Connect API key credentials, stapled, and verified before upload.
 - macOS downloads are mirrored to the website only after Developer ID signing and notarization pass.
 - macOS signing is separate from Windows signing and separate from Tauri updater signing.

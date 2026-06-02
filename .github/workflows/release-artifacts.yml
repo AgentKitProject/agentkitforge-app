@@ -118,6 +118,10 @@ jobs:
     name: Build ${{ matrix.platform }} artifacts
     runs-on: ${{ matrix.os }}
     needs: prepare
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -444,6 +448,107 @@ jobs:
 
           Copy-Item -LiteralPath $setupSig -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-setup.exe.sig") -Force
           Copy-Item -LiteralPath $msiSig -Destination (Join-Path $assetDir "AgentKitForge-$env:VERSION-x64.msi.sig") -Force
+
+      - name: Validate Windows signing configuration
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.TRUSTED_SIGNING_ACCOUNT_NAME || secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
+          TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          TRUSTED_SIGNING_ENDPOINT: ${{ vars.TRUSTED_SIGNING_ENDPOINT || secrets.TRUSTED_SIGNING_ENDPOINT }}
+        run: |
+          $required = @(
+            "AZURE_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID",
+            "TRUSTED_SIGNING_ACCOUNT_NAME",
+            "TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME",
+            "TRUSTED_SIGNING_ENDPOINT"
+          )
+
+          $missing = $required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) {
+            throw "Missing required Windows Trusted Signing configuration: $($missing -join ', ')"
+          }
+
+          $files = @(
+            "release-assets/AgentKitForge-${{ needs.prepare.outputs.version }}-setup.exe",
+            "release-assets/AgentKitForge-${{ needs.prepare.outputs.version }}-x64.msi"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) {
+              throw "Windows signing input not found: $file"
+            }
+          }
+
+          Write-Host "Windows code signing started."
+          Write-Host "Files being signed:"
+          $files | ForEach-Object { Write-Host "- $_" }
+
+      - name: Set up .NET for Windows signing
+        if: ${{ matrix.platform == 'windows' }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Azure login for Windows signing
+        if: ${{ matrix.platform == 'windows' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows artifacts with Trusted Signing
+        if: ${{ matrix.platform == 'windows' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT || secrets.TRUSTED_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT_NAME || secrets.TRUSTED_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files: |
+            ${{ github.workspace }}\release-assets\AgentKitForge-${{ needs.prepare.outputs.version }}-setup.exe
+            ${{ github.workspace }}\release-assets\AgentKitForge-${{ needs.prepare.outputs.version }}-x64.msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify Windows Authenticode signatures
+        if: ${{ matrix.platform == 'windows' }}
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+          if (-not $signtool) {
+            $kitsRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+            $signtool = Get-ChildItem $kitsRoot -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -like "*\x64\signtool.exe" } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+          }
+          if (-not $signtool) {
+            throw "signtool.exe was not found on the Windows runner."
+          }
+
+          $files = @(
+            "release-assets/AgentKitForge-$env:VERSION-setup.exe",
+            "release-assets/AgentKitForge-$env:VERSION-x64.msi"
+          )
+
+          foreach ($file in $files) {
+            Write-Host "Verifying Authenticode signature: $file"
+            & $signtool.FullName verify /pa /tw /v $file
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows Authenticode signature verification failed for $file."
+            }
+          }
+
+          Write-Host "Windows code signing completed."
+          Write-Host "Windows signature verification completed."
 
       - name: Collect macOS artifacts
         if: ${{ matrix.platform == 'macos' }}
