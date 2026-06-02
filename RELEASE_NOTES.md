@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.4.1](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.4.0...v0.4.1) (2026-06-02)
+
+
+### Bug Fixes
+
+* repair packaged AI runtime on macOS ([6fb4ec0](https://github.com/AgentKitProject/agentkitforge-app/commit/6fb4ec0e8676c08d932add12ec5398bdafe0d5b2))
+
 ## [0.4.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.3.0...v0.4.0) (2026-06-02)
 
 
