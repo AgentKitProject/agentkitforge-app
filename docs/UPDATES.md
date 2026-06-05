@@ -4,13 +4,19 @@ AgentKitForge uses the Tauri updater for desktop updates on Windows, macOS, and 
 
 ## Update Endpoint
 
-The app checks:
+New app builds check the canonical Forge endpoint first:
+
+```text
+https://forge.agentkitproject.com/updates/latest.json
+```
+
+The legacy endpoint remains configured as a fallback where supported:
 
 ```text
 https://agentkitforge.com/updates/latest.json
 ```
 
-The private infrastructure repository owns this endpoint and mirrors only release artifacts that have completed the app release workflow.
+The private infrastructure repository owns these endpoints and mirrors only release artifacts that have completed the app release workflow. Existing installed apps may continue checking `https://agentkitforge.com/updates/latest.json` until they update to a build with the canonical endpoint list.
 
 ## App Behavior
 
@@ -43,10 +49,11 @@ Release builds use `src-tauri/tauri.updater.conf.json` to enable updater artifac
 During app releases, the app workflow uploads `AgentKitForge-${version}-update-metadata.json` to the GitHub Release. The private infra repo uses that metadata plus the mirrored release assets to publish:
 
 ```text
+https://forge.agentkitproject.com/updates/latest.json
 https://agentkitforge.com/updates/latest.json
 ```
 
-The metadata contains the release version, tag, notes, publication time, and one platform entry per completed updater artifact. Platform entries use Tauri's default keys such as:
+`https://forge.agentkitproject.com` is the canonical Forge domain. `https://agentkitforge.com` remains supported during migration for backward compatibility with existing installs. The metadata contains the release version, tag, notes, publication time, and one platform entry per completed updater artifact. Platform entries use Tauri's default keys such as:
 
 - `windows-x86_64`
 - `darwin-x86_64`
@@ -68,3 +75,5 @@ Do not rotate the updater signing key casually. Existing installs trust the publ
 ## Local Development
 
 Local development builds do not create updater signatures by default. To test updater artifact creation locally, run Tauri with `src-tauri/tauri.updater.conf.json` and set `TAURI_SIGNING_PRIVATE_KEY`. Unsigned local builds can still run, but they should not be published as public update artifacts.
+
+AgentKitForge remains local-first. AgentKitProject login, Market integration, and future Auto integration are optional and are not part of updater behavior.

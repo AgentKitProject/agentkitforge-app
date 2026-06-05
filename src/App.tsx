@@ -945,10 +945,10 @@ export function App() {
         </div>
 
         <div className="sidebar-help">
-          <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">
+          <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">
             Docs
           </button>
-          <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">
+          <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">
             Agent Kit Spec
           </button>
         </div>
@@ -1287,8 +1287,8 @@ function MyKitsScreen({
             <button className="secondary-button" onClick={onImportKit} type="button">Import Agent Kit</button>
           </div>
           <div className="help-link-row">
-            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Read the docs</button>
-            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+            <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">Read the docs</button>
+            <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
           </div>
         </div>
       </div>
@@ -2089,8 +2089,8 @@ function ImportFolderPanel({
       )}
 
       <div className="help-link-row">
-        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
-        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">Import docs</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
       </div>
     </div>
   );
@@ -2390,8 +2390,8 @@ function ComingSoonImportPanel({ title }: { title: string }) {
         <p>This import source is coming later. For v0.1, use a package, folder, or public Git repository.</p>
       </div>
       <div className="help-link-row">
-        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Import docs</button>
-        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">Import docs</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
       </div>
     </div>
   );
@@ -3354,8 +3354,8 @@ function BuildScreen({
         <div className="form-panel">
           <h2>Build with AI</h2>
           <div className="help-link-row">
-            <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Build docs</button>
-            <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+            <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">Build docs</button>
+            <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
           </div>
 
           {settings.aiProviders.length === 0 && (
@@ -9054,7 +9054,7 @@ function SettingsScreen({
       <section className="form-panel settings-panel">
       <h2>Updates</h2>
       <p className="form-copy">
-        AgentKitForge checks agentkitforge.com for signed desktop updates. Updates are never installed until you choose Update now.
+        AgentKitForge checks forge.agentkitproject.com for signed desktop updates, with agentkitforge.com retained as a legacy fallback. Updates are never installed until you choose Update now.
       </p>
       <dl className="report-meta">
         <div>
@@ -9128,9 +9128,9 @@ function SettingsScreen({
         AgentKitForge {appVersion} is a desktop workspace for building, packaging, installing, and using portable Agent Kits.
       </p>
       <div className="about-links">
-        <button onClick={() => openDocsLink("https://agentkitforge.com/")} type="button">AgentKitForge.com</button>
-        <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">Docs</button>
-        <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/")} type="button">Forge website</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">Docs</button>
+        <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">Agent Kit Spec</button>
       </div>
       </section>
     </div>
@@ -9166,13 +9166,13 @@ function AboutScreen({ appVersion, settings }: { appVersion: string; settings: P
         </dl>
 
         <div className="about-links">
-          <button onClick={() => openDocsLink("https://agentkitforge.com/")} type="button">
-            AgentKitForge.com
+          <button onClick={() => openDocsLink("https://forge.agentkitproject.com/")} type="button">
+            Forge website
           </button>
-          <button onClick={() => openDocsLink("https://agentkitforge.com/docs/")} type="button">
+          <button onClick={() => openDocsLink("https://forge.agentkitproject.com/docs/")} type="button">
             Docs
           </button>
-          <button onClick={() => openDocsLink("https://agentkitforge.com/agent-kit-spec/")} type="button">
+          <button onClick={() => openDocsLink("https://forge.agentkitproject.com/agent-kit-spec/")} type="button">
             Agent Kit Spec
           </button>
         </div>

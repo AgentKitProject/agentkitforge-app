@@ -54,6 +54,8 @@ Public macOS release artifacts require Apple Developer ID signing and notarizati
 
 The website mirror is dispatched only after the signed/notarized macOS artifact is uploaded to the GitHub Release and verified in the release-asset manifest. If macOS signing, notarization, stapling, or verification fails, the website remains on the previous valid release.
 
+The canonical Forge website domain is `https://forge.agentkitproject.com`. The legacy `https://agentkitforge.com` domain remains supported during migration, including as a fallback updater endpoint for builds that support multiple updater endpoints. Existing installed apps may continue checking the old endpoint until updated. AgentKitForge remains local-first; AgentKitProject login, Market integration, and future Auto integration are optional and are not part of portability requirements.
+
 Required GitHub secrets:
 
 - `APPLE_CERTIFICATE_BASE64`

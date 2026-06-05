@@ -15,7 +15,7 @@
     "build:frontend": "tsc && vite build",
     "build:tauri": "tauri build",
     "check": "tsc && cargo check --manifest-path src-tauri/Cargo.toml",
-    "test": "node --test tests/backend-provider-resolution.test.mjs",
+    "test": "node --test tests/*.test.mjs",
     "smoke": "npm run check && npm run build",
     "preview": "vite preview"
   },

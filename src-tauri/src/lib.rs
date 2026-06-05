@@ -1079,7 +1079,10 @@ fn open_folder<R: Runtime>(app: tauri::AppHandle<R>, path: String) -> Result<(),
 fn open_external_url<R: Runtime>(app: tauri::AppHandle<R>, url: String) -> Result<(), String> {
     if !matches!(
         url.as_str(),
-        "https://agentkitforge.com/"
+        "https://forge.agentkitproject.com/"
+            | "https://forge.agentkitproject.com/docs/"
+            | "https://forge.agentkitproject.com/agent-kit-spec/"
+            | "https://agentkitforge.com/"
             | "https://agentkitforge.com/docs/"
             | "https://agentkitforge.com/agent-kit-spec/"
     ) {

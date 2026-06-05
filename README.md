@@ -503,13 +503,15 @@ Settings are stored in Tauri app-local data as `settings.json`. On Windows this 
 
 ## About
 
-The About screen shows the AgentKitForge version, product description, links to AgentKitForge.com, Docs, and the Agent Kit Spec, plus local-only privacy and AI provider key storage notes.
+The About screen shows the AgentKitForge version, product description, links to the Forge website, Docs, and the Agent Kit Spec, plus local-only privacy and AI provider key storage notes.
 
 Docs links:
 
-- https://agentkitforge.com/
-- https://agentkitforge.com/docs/
-- https://agentkitforge.com/agent-kit-spec/
+- https://forge.agentkitproject.com/
+- https://forge.agentkitproject.com/docs/
+- https://forge.agentkitproject.com/agent-kit-spec/
+
+`https://forge.agentkitproject.com` is the canonical Forge domain. The legacy `https://agentkitforge.com` domain remains supported during migration, including for existing installed apps that still check the old updater endpoint. AgentKitForge remains local-first; AgentKitProject login, Market integration, and future Auto integration are optional and are not required for local kit workflows.
 
 ## My Kits Library
 

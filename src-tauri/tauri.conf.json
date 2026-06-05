@@ -62,6 +62,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDMDYzNzdCOTQ3NDNBQTgKUldTb09uU1VlemNHdkZRTE9nVHZkK3lwVDdSS21ETENUdkdnVlh5aHhQQ1ZzNWRNQUpLOThPNUIK",
       "endpoints": [
+        "https://forge.agentkitproject.com/updates/latest.json",
         "https://agentkitforge.com/updates/latest.json"
       ]
     }

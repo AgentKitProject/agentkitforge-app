@@ -80,7 +80,7 @@ When Release Please creates a GitHub Release, the same `release-please.yml` work
 
 The GitHub Release may exist before all installer artifacts are ready. That is acceptable. The website mirror is gated on the artifact jobs, checksums, signing/notarization checks, upload completion, and a final release-asset verification step.
 
-AgentKitForge uses the Tauri updater for in-app updates. Public releases check `https://agentkitforge.com/updates/latest.json`. The app release workflow uploads `AgentKitForge-${version}-update-metadata.json`, and the private infra repo uses that metadata to generate `/updates/latest.json`. The metadata and endpoint should include only platforms whose update artifacts, signatures, checksums, and platform-specific signing/notarization checks completed successfully.
+AgentKitForge uses the Tauri updater for in-app updates. New public releases prefer `https://forge.agentkitproject.com/updates/latest.json` and retain `https://agentkitforge.com/updates/latest.json` as a legacy fallback where supported. The app release workflow uploads `AgentKitForge-${version}-update-metadata.json`, and the private infra repo uses that metadata to generate `/updates/latest.json` on both domains during migration. The metadata and endpoint should include only platforms whose update artifacts, signatures, checksums, and platform-specific signing/notarization checks completed successfully.
 
 ## Core Dependency
 
@@ -161,7 +161,7 @@ Signed Windows apps can still see Microsoft Defender SmartScreen warnings until 
    - macOS artifacts were signed, notarized, stapled, and Gatekeeper-verified before upload
 7. The workflow uploads `AgentKitForge-${version}-update-metadata.json` to the GitHub Release.
 8. Only after verification passes, the job dispatches the private infra repo with event type `app-release-published`.
-9. The private infra repo mirrors the artifacts to `agentkitforge.com` and publishes `/updates/latest.json`.
+9. The private infra repo mirrors the artifacts to `forge.agentkitproject.com`, keeps `agentkitforge.com` available during migration, and publishes `/updates/latest.json`.
 
 The app repo does not store AWS credentials and does not upload directly to S3. Website/S3 mirroring is owned by the private `AgentKitProject/agentkitforge-infra` repository.
 
@@ -197,7 +197,7 @@ The updater private key must never be committed. Updater signatures are mandator
 - macOS downloads are mirrored to the website only after Developer ID signing and notarization pass.
 - macOS signing is separate from Windows signing and separate from Tauri updater signing.
 - Downloaded macOS artifacts should no longer show the "damaged and can't be opened" Gatekeeper error once notarization succeeds and the ticket is stapled.
-- In-app updates are configured through the Tauri updater. The app checks `agentkitforge.com` and requires the user to approve installation.
+- In-app updates are configured through the Tauri updater. New builds check `forge.agentkitproject.com` first, keep `agentkitforge.com` as a legacy fallback where supported, and require the user to approve installation.
 - Local macOS development builds may still be unsigned and can be blocked or warned by Gatekeeper.
 - Linux artifacts are unsigned except for SHA-256 checksums and Tauri updater signatures unless a separate package-signing process is configured.
 - Linux update entries should be mirrored only when the AppImage and updater signature are both present.
