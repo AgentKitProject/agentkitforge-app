@@ -1,5 +1,12 @@
 # AgentKitForge Release Notes
 
+## [0.5.0](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.4.1...v0.5.0) (2026-06-05)
+
+
+### Features
+
+* updating to new domain ([e979527](https://github.com/AgentKitProject/agentkitforge-app/commit/e979527bca678edacd2e0a066c98f58e47b5fafb))
+
 ## [0.4.1](https://github.com/AgentKitProject/agentkitforge-app/compare/v0.4.0...v0.4.1) (2026-06-02)
 
 
